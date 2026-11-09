@@ -73,7 +73,7 @@ def live_loop(args, systems, window: str) -> None:
                 if f is None:
                     text(panel, "No face detected", (10, panel.shape[0] // 2), 0.8, (0, 210, 255), 2)
                 panels.append(panel)
-            beeper(status.level)  # sound follows the last panel (PADD)
+            beeper(status.level, status.distracted)  # sound follows the last panel (PADD)
             view = panels[0] if len(panels) == 1 else side_by_side(*panels)
             cv2.imshow(window, fit_to_screen(view))
             key = cv2.waitKey(1) & 0xFF

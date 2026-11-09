@@ -17,6 +17,7 @@ class Status:
     cues: dict[str, float] = field(default_factory=dict)  # per-cue contribution
     reasons: list[str] = field(default_factory=list)
     info: dict[str, float] = field(default_factory=dict)  # numbers for the overlay
+    distracted: bool = False  # eyes off the road (separate from drowsiness level)
 
 
 class DrowsinessSystem:

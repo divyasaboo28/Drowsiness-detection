@@ -17,6 +17,7 @@ FONT = cv2.FONT_HERSHEY_SIMPLEX
 GREEN = (80, 200, 80)
 YELLOW = (0, 210, 255)
 RED = (40, 40, 230)
+ORANGE = (0, 140, 255)
 WHITE = (255, 255, 255)
 GREY = (170, 170, 170)
 DARK = (25, 25, 25)
@@ -61,6 +62,10 @@ def draw_status(img, title: str, status: Status, alarms: int, show_cues: bool) -
     cv2.putText(img, f"{title}  |  {LEVEL_NAMES[status.level]}", (10, 23), FONT, 0.6, DARK, 2, cv2.LINE_AA)
     if status.level == ALARM:
         cv2.rectangle(img, (0, 0), (w - 1, h - 1), RED, 8)
+    elif status.distracted:
+        cv2.rectangle(img, (0, h - 68), (w, h - 38), ORANGE, -1)
+        cv2.putText(img, "EYES ON THE ROAD", (10, h - 46), FONT, 0.7, DARK, 2, cv2.LINE_AA)
+        cv2.rectangle(img, (0, 0), (w - 1, h - 1), ORANGE, 4)
 
     y = 60
     info = status.info
@@ -131,19 +136,26 @@ class Beeper:
         self.enabled = enabled
         self._last = 0.0
 
-    def __call__(self, level: int) -> None:
-        if not self.enabled or level != ALARM:
+    def __call__(self, level: int, distracted: bool = False) -> None:
+        """Loud beep for a drowsiness ALARM; a short, soft beep for distraction."""
+        if not self.enabled:
+            return
+        if level == ALARM:
+            sound, interval = (C.BEEP_FREQ, C.BEEP_MS), C.BEEP_INTERVAL
+        elif distracted:
+            sound, interval = (C.DISTRACT_BEEP_FREQ, C.DISTRACT_BEEP_MS), C.DISTRACT_BEEP_INTERVAL
+        else:
             return
         now = time.monotonic()
-        if now - self._last < C.BEEP_INTERVAL:
+        if now - self._last < interval:
             return
         self._last = now
-        threading.Thread(target=self._play, daemon=True).start()
+        threading.Thread(target=self._play, args=sound, daemon=True).start()
 
     @staticmethod
-    def _play() -> None:
+    def _play(freq: int, ms: int) -> None:
         if os.name == "nt":
             import winsound
-            winsound.Beep(C.BEEP_FREQ, C.BEEP_MS)
+            winsound.Beep(freq, ms)
         else:
             print("\a", end="", flush=True)

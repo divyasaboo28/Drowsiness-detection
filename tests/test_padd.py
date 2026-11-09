@@ -191,21 +191,23 @@ def test_head_slump_raises_alarm(profile):
     assert all(s.level == ALARM for s in statuses[int(16 * FPS):])
 
 
-def test_head_down_too_long_raises_alarm_even_if_face_is_lost(profile):
-    """A fast look-down is not a slump, but held for 12 s it still alarms,
-    also when the face tracker loses the face with the chin on the chest."""
+def test_head_down_gives_distraction_warning_not_alarm(profile):
+    """A fast look-down (phone) is distraction, not sleep: after 3 s a soft
+    "eyes on the road" warning, never a drowsiness ALARM. The warning stays
+    when the face tracker loses the face with the chin on the chest."""
     def fn(t):
         if t >= 10:
             return {"factor": blink_factor(t), "dp": 25.0 * min(1.0, (t - 10) / 0.15)}
         return normal(t)
 
     padd = PADDSystem(profile)
-    levels = []
+    statuses = []
     for f in stream(30, fn):
         face = None if f.t >= 15 else f  # face lost 5 s into the look-down
-        levels.append(padd.update(face, f.t).level)
-    assert all(lv != ALARM for lv in levels[: int(21.5 * FPS)])  # 10 s phone glance is fine
-    assert all(lv == ALARM for lv in levels[int(22.5 * FPS):])
+        statuses.append(padd.update(face, f.t))
+    assert all(s.level != ALARM for s in statuses)
+    assert not any(s.distracted for s in statuses[: int(12.5 * FPS)])  # short glance: quiet
+    assert all(s.distracted for s in statuses[int(13.5 * FPS):])  # incl. after face is lost
 
 
 def test_microsleep_override(profile):

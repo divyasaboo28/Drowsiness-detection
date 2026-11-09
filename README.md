@@ -329,7 +329,7 @@ experiment. Main groups:
 | Blinks | `LONG_CLOSURE_MIN = 1.0`, `OVERRIDE_CLOSURE = 2.0` | Long closure and safety-override durations |
 | Yawns | `YAWN_MIN_DURATION = 1.2`, `YAWN_MAX_OSC_RATE` | Minimum yawn length; how much zig-zag counts as talking |
 | Nods | `NOD_DROOP_MIN = 10`, `NOD_SLOW_MAX_VEL = 20`, `NOD_RECOVERY_VEL = 40` | Degrees and degrees/second for the nod signature |
-| Head down | `HEAD_SLUMP_TIME = 3`, `HEAD_DOWN_ALARM = 12` | Seconds a slow droop may stay down (slump), and seconds any head-down may last, before ALARM |
+| Head down | `HEAD_SLUMP_TIME = 3`, `DISTRACTION_TIME = 3` | Seconds a slow droop may stay down before ALARM (slump), and seconds any head-down may last before the soft "eyes on the road" warning |
 | Evidence | `TAU_*`, `FULL_*` | How long each event "counts" and how many events saturate a cue |
 | Fusion | `WEIGHTS`, `CAUTION_ON/OFF`, `ALARM_ON/OFF`, `ALARM_HOLD`, `RECENT_WINDOW` | Cue weights, alert thresholds with hysteresis, and how fresh the evidence must be for ALARM |
 | Confidence | `YAW_FULL_CONF`, `YAW_ZERO_CONF` | How much head turning reduces trust in the eyes/mouth |
@@ -445,8 +445,8 @@ What `update()` does every frame:
    - With no fresh event for 6 s, ALARM drops to the silent CAUTION level. Evidence is remembered for minutes, so without this rule the alarm would stay on long after you are alert again
 6. **Override**: ALARM regardless of the score when
    - the eyes are closed for 2 s or more (only while the eyes are actually visible), or
-   - the head drooped **slowly** and has stayed down for 3 s (a slump: falling asleep), or
-   - the head has been down for 12 s, however it got there (eyes off the road too long). If the face disappears while the head is down, which happens when the chin drops to the chest, the head counts as still down
+   - the head drooped **slowly** and has stayed down for 3 s (a slump: falling asleep)
+   - **Distraction** (separate from drowsiness): if the head has been down for 3 s, however it got there, PADD shows an orange **EYES ON THE ROAD** banner and gives a short, soft beep. This is not an ALARM and is not counted as one. If the face disappears while the head is down (chin on chest), the head counts as still down
 7. **Adapt**: only when the score is below 0.15, the eyes are open and nothing is closing
 8. **Explain**: builds the "Why:" reasons and the overlay numbers
 
@@ -518,7 +518,7 @@ when looking down, and whose head-pitch sign is reversed. No camera is needed. T
 | `test_drowsy_episode_raises_alarm` | Slow blinks + yawn + nod + long closure → ALARM, with no alarm before the episode |
 | `test_alarm_turns_off_after_recovery` | After yawns, nods and slow blinks, the alarm turns off within seconds once you look alert |
 | `test_head_slump_raises_alarm` | Head droops slowly and stays down → ALARM about 3 s later |
-| `test_head_down_too_long_raises_alarm_even_if_face_is_lost` | A 10 s phone glance is fine; a 12 s head-down alarms, even after the face is lost |
+| `test_head_down_gives_distraction_warning_not_alarm` | Looking down at a phone gives the soft distraction warning after 3 s (also after the face is lost), never a drowsiness ALARM |
 | `test_microsleep_override` | A 2.5 s closure alarms 2.0–2.2 s after the eyes close |
 | `test_nod_detector_separates_nod_from_look_down` | Slow droop + snap = 1 nod; fast look-down + hold = 0 |
 | `test_yawn_detector` | Accepts a yawn, rejects talking |
@@ -553,7 +553,7 @@ ALARM     score > 0.50 for 1 s  and a drowsy event in the last 6 s
           (back down below 0.40, or to CAUTION after 6 s with no new event)
 OVERRIDE  eyes closed ≥ 2 s             →  ALARM immediately
           slow head droop, down ≥ 3 s   →  ALARM (head slumped)
-          head down ≥ 12 s, any speed   →  ALARM (eyes off the road)
+DISTRACT  head down ≥ 3 s, any speed    →  EYES ON THE ROAD (soft beep, not an ALARM)
 ```
 
 No single cue can reach ALARM on its own (the largest weight is 0.35), so several signs must

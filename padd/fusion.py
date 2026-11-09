@@ -170,13 +170,14 @@ class PADDSystem(DrowsinessSystem):
             self.last_eye_t = t
         # Override only while we can actually see the eyes (not after turning away)
         eyes_override = closed_for >= C.OVERRIDE_CLOSURE and t - self.last_eye_t < 0.5
-        # Head overrides: a slow droop that stays down is the posture of
-        # falling asleep; any head-down held very long means the eyes have
-        # been off the road too long, whatever the reason.
+        # Head slump override: a slow droop that stays down is the posture of
+        # falling asleep.
         slump_override = slumped_for >= C.HEAD_SLUMP_TIME
-        head_override = head_down_for >= C.HEAD_DOWN_ALARM
-        override = eyes_override or slump_override or head_override
+        override = eyes_override or slump_override
         level = ALARM if override else self.base_level
+        # Distraction (separate from drowsiness): head down for a few seconds,
+        # however it got there, means the eyes are off the road.
+        distracted = head_down_for >= C.DISTRACTION_TIME and level != ALARM
 
         # Guarded adaptation: only learn while clearly alert and eyes open
         if (self.use_adapt and f is not None and openness is not None and dt > 0
@@ -188,8 +189,8 @@ class PADDSystem(DrowsinessSystem):
             reasons.append(f"eyes closed {closed_for:.1f}s")
         if slump_override:
             reasons.append(f"head slumped {slumped_for:.0f}s")
-        elif head_override:
-            reasons.append(f"head down {head_down_for:.0f}s")
+        if distracted:
+            reasons.append(f"eyes off road {head_down_for:.0f}s")
         if scores["eye"] > 0.3:
             reasons.append(f"eyes: PERCLOS {perclos * 100:.0f}%" if perclos_score >= self.ev_long.score(t)
                            else "eyes: long closure")
@@ -203,4 +204,5 @@ class PADDSystem(DrowsinessSystem):
         info.update(perclos=perclos, closed_for=closed_for, eye_conf=eye_conf,
                     head_down_for=head_down_for, slumped_for=slumped_for,
                     ear_offset=self.model.ear_offset, pitch_offset=self.model.pitch_offset)
-        return Status(level=level, score=D, cues=cues, reasons=reasons, info=info)
+        return Status(level=level, score=D, cues=cues, reasons=reasons, info=info,
+                      distracted=distracted)

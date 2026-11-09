@@ -68,7 +68,9 @@ NOD_DROOP_MIN = 10.0  # head must drop at least this far
 NOD_SLOW_MAX_VEL = 20.0  # avg deg/s while dropping; faster = voluntary look-down
 NOD_RECOVERY_VEL = 40.0  # deg/s upward snap that completes a nod
 HEAD_SLUMP_TIME = 3.0  # head drooped slowly and stays down this long = slumped asleep
-HEAD_DOWN_ALARM = 12.0  # head down this long, any speed = eyes off the road too long
+# Head down this long (any speed, eyes open) = eyes off the road. This is
+# distraction, not drowsiness: a separate soft warning, never an ALARM.
+DISTRACTION_TIME = 3.0
 NOD_SMOOTH_TAU = 0.08
 NOD_VEL_TAU = 0.10
 DEFAULT_PITCH_SIGN = 1.0
@@ -119,3 +121,7 @@ POSE_PITCH_RANGE = (-30.0, 40.0)
 BEEP_FREQ = 1200
 BEEP_MS = 250
 BEEP_INTERVAL = 0.8
+# Distraction warning: a softer, shorter, less frequent beep
+DISTRACT_BEEP_FREQ = 700
+DISTRACT_BEEP_MS = 100
+DISTRACT_BEEP_INTERVAL = 1.5
