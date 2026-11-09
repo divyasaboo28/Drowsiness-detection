@@ -89,8 +89,13 @@ WEIGHTS = {"eye": 0.35, "blink": 0.20, "yawn": 0.15, "nod": 0.30}
 FUSION_TAU = 1.0  # leaky-integrator time constant
 RELIABILITY_TAU = 3.0  # smoothing of per-cue landmark confidence
 CAUTION_ON, CAUTION_OFF = 0.35, 0.25
-ALARM_ON, ALARM_OFF = 0.60, 0.45
+ALARM_ON, ALARM_OFF = 0.50, 0.40
 ALARM_HOLD = 1.0  # score must stay above ALARM_ON this long
+# Evidence fades over minutes, so a high score alone can mean "was drowsy a
+# while ago". ALARM also needs a fresh drowsy event (slow blink, long closure,
+# yawn, nod) in the last RECENT_WINDOW seconds, or the eyes closed right now.
+# Without one, ALARM drops to CAUTION (silent) until the evidence fades.
+RECENT_WINDOW = 6.0
 
 # Confidence: frames below this are not fed to a cue's detector
 MIN_CONFIDENCE = 0.4

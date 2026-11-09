@@ -11,6 +11,7 @@ import math
 import numpy as np
 import pytest
 
+from padd import config as C
 from padd.baselines import FixedThresholdSystem
 from padd.calibration import PHASES, fit_profile
 from padd.detectors import NodDetector, YawnDetector
@@ -144,6 +145,34 @@ def test_drowsy_episode_raises_alarm(profile):
     assert padd.counts["slow_blinks"] >= 3
     assert any(s.level == ALARM for s in statuses[int(30 * FPS):])
     assert all(s.level != ALARM for s in statuses[: int(30 * FPS)])
+
+
+def test_alarm_turns_off_after_recovery(profile):
+    """Old evidence must not keep the alarm on once the person is alert again."""
+    def drowsy(t):
+        out = {"factor": 1.0}
+        k = t % 3.0  # slow blinks
+        out["factor"] = 0.0 if k < 0.6 else min(1.0, (k - 0.6) / 0.4) if k < 1.0 else 1.0
+        for start in (5.0, 25.0):  # two yawns
+            if start <= t < start + 3:
+                out["mar"] = 0.85
+        for start in (12.0, 32.0):  # two nods: slow droop, fast snap back
+            if start <= t < start + 2:
+                out["dp"] = 20.0 * (t - start) / 2.0
+            elif start + 2 <= t < start + 2.15:
+                out["dp"] = 20.0 * (1 - (t - start - 2) / 0.15)
+        return out
+
+    def fn(t):
+        return drowsy(t) if t < 40 else normal(t)
+
+    padd = PADDSystem(profile)
+    statuses = run(padd, stream(100, fn))
+    assert any(s.level == ALARM for s in statuses[: int(40 * FPS)])
+    # Score is still high from the yawns and nods, but the person looks alert:
+    # after a short grace period the alarm must be off (CAUTION at most).
+    assert max(s.score for s in statuses[int(55 * FPS):int(60 * FPS)]) > C.ALARM_OFF
+    assert all(s.level != ALARM for s in statuses[int(55 * FPS):])
 
 
 def test_microsleep_override(profile):

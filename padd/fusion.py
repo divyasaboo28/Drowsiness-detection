@@ -64,6 +64,7 @@ class PADDSystem(DrowsinessSystem):
         self.above_since: float | None = None
         self.last_t: float | None = None
         self.last_eye_t = -1e9
+        self.last_event_t = -1e9  # time of the latest drowsy event of any kind
         self.counts = {"slow_blinks": 0, "long_closures": 0, "yawns": 0, "nods": 0}
 
     # ------------------------------------------------------------------
@@ -89,17 +90,21 @@ class PADDSystem(DrowsinessSystem):
                 if ev.long:
                     self.ev_long.add(t)
                     self.counts["long_closures"] += 1
+                    self.last_event_t = t
                 elif ev.slow:
                     self.ev_slow.add(t)
                     self.counts["slow_blinks"] += 1
+                    self.last_event_t = t
             self.perclos.update(t, openness)
 
             if mouth_conf >= C.MIN_CONFIDENCE and self.yawns.update(t, f.mar):
                 self.ev_yawn.add(t)
                 self.counts["yawns"] += 1
+                self.last_event_t = t
             if self.use_nod and self.nods.update(t, rp):
                 self.ev_nod.add(t)
                 self.counts["nods"] += 1
+                self.last_event_t = t
         else:
             self.perclos.update(t, None)
 
@@ -124,13 +129,19 @@ class PADDSystem(DrowsinessSystem):
         if dt > 0:
             self.score += (1.0 - math.exp(-dt / C.FUSION_TAU)) * (fused - self.score)
 
-        # Hysteresis state machine
+        # Hysteresis state machine. ALARM needs a high score AND fresh evidence:
+        # the score alone remembers minutes of past events and would keep the
+        # alarm on long after the person is alert again.
         D = self.score
+        closed_for = self.blinks.closed_for(t)
+        recent = t - self.last_event_t <= C.RECENT_WINDOW or closed_for >= 0.5
+        info["recent"] = float(recent)
         if self.base_level == ALARM:
-            if D < C.ALARM_OFF:
+            if D < C.ALARM_OFF or not recent:
                 self.base_level = CAUTION if D >= C.CAUTION_OFF else OK
+                self.above_since = None
         else:
-            if D > C.ALARM_ON:
+            if D > C.ALARM_ON and recent:
                 self.above_since = t if self.above_since is None else self.above_since
                 if t - self.above_since >= C.ALARM_HOLD:
                     self.base_level = ALARM
@@ -143,7 +154,6 @@ class PADDSystem(DrowsinessSystem):
 
         if openness is not None:
             self.last_eye_t = t
-        closed_for = self.blinks.closed_for(t)
         # Override only while we can actually see the eyes (not after turning away)
         override = closed_for >= C.OVERRIDE_CLOSURE and t - self.last_eye_t < 0.5
         level = ALARM if override else self.base_level

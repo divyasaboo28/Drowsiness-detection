@@ -111,7 +111,7 @@ This installs MediaPipe, OpenCV, NumPy, SciPy, Matplotlib and pytest, about 150 
 pytest
 ```
 
-You should see `9 passed`. This tests the detection logic on a synthetic person.
+You should see `10 passed`. This tests the detection logic on a synthetic person.
 
 ### Step 6: Calibrate yourself (~90 seconds)
 
@@ -330,7 +330,7 @@ experiment. Main groups:
 | Yawns | `YAWN_MIN_DURATION = 1.2`, `YAWN_MAX_OSC_RATE` | Minimum yawn length; how much zig-zag counts as talking |
 | Nods | `NOD_DROOP_MIN = 10`, `NOD_SLOW_MAX_VEL = 20`, `NOD_RECOVERY_VEL = 40` | Degrees and degrees/second for the nod signature |
 | Evidence | `TAU_*`, `FULL_*` | How long each event "counts" and how many events saturate a cue |
-| Fusion | `WEIGHTS`, `CAUTION_ON/OFF`, `ALARM_ON/OFF`, `ALARM_HOLD` | Cue weights and alert thresholds with hysteresis |
+| Fusion | `WEIGHTS`, `CAUTION_ON/OFF`, `ALARM_ON/OFF`, `ALARM_HOLD`, `RECENT_WINDOW` | Cue weights, alert thresholds with hysteresis, and how fresh the evidence must be for ALARM |
 | Confidence | `YAW_FULL_CONF`, `YAW_ZERO_CONF` | How much head turning reduces trust in the eyes/mouth |
 | Adaptation | `ADAPT_MAX_SCORE`, `ADAPT_TAU_*`, `ADAPT_MAX_*` | When and how fast the baseline may drift, and how far |
 
@@ -440,7 +440,8 @@ What `update()` does every frame:
 4. **Fuse**: Σ weight × reliability × score, smoothed by a leaky integrator (τ = 1 s)
 5. **Decide**: hysteresis state machine:
    - CAUTION when the score goes above 0.35; back to OK below 0.25
-   - ALARM when the score stays above 0.60 for 1 s; leaves ALARM below 0.45
+   - ALARM when the score stays above 0.50 for 1 s **and** there was a drowsy event (slow blink, long closure, yawn, nod) in the last 6 s or the eyes are closed now; leaves ALARM below 0.40
+   - With no fresh event for 6 s, ALARM drops to the silent CAUTION level. Evidence is remembered for minutes, so without this rule the alarm would stay on long after you are alert again
 6. **Override**: eyes closed for 2 s or more → ALARM regardless, but only while the eyes are actually visible
 7. **Adapt**: only when the score is below 0.15, the eyes are open and nothing is closing
 8. **Explain**: builds the "Why:" reasons and the overlay numbers
@@ -541,7 +542,8 @@ when looking down, and whose head-pitch sign is reversed. No camera is needed. T
 score = smooth( Σ weight × reliability × cue_score )
 
 CAUTION   score > 0.35          (back to OK below 0.25)
-ALARM     score > 0.60 for 1 s  (back down below 0.45)
+ALARM     score > 0.50 for 1 s  and a drowsy event in the last 6 s
+          (back down below 0.40, or to CAUTION after 6 s with no new event)
 OVERRIDE  eyes closed ≥ 2 s  →  ALARM immediately
 ```
 
@@ -556,8 +558,8 @@ All values are in `padd/config.py`. Common adjustments:
 
 | If... | Try |
 |---|---|
-| PADD alarms too easily | Raise `ALARM_ON` (e.g. 0.65) or `ALARM_HOLD` |
-| PADD is too slow to alarm | Lower `ALARM_ON` (e.g. 0.5) or `OVERRIDE_CLOSURE` |
+| PADD alarms too easily | Raise `ALARM_ON` (e.g. 0.6) or `ALARM_HOLD` |
+| PADD is too slow to alarm | Lower `ALARM_ON` (e.g. 0.45) or `OVERRIDE_CLOSURE` |
 | Nods are missed | Lower `NOD_RECOVERY_VEL` (e.g. 30) or `NOD_DROOP_MIN` |
 | Looking down counts as a nod | Lower `NOD_SLOW_MAX_VEL` |
 | Talking counts as yawning | Lower `YAWN_MAX_OSC_RATE` or raise `YAWN_MIN_DURATION` |
