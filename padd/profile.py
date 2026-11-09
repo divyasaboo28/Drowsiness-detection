@@ -1,8 +1,12 @@
 """User profile (learned at calibration) and the runtime personal model.
 
-The profile is plain data saved as JSON. PersonalModel wraps it at runtime,
-turns raw measurements into personal ones (openness, relative pitch) and
-carries the guarded online adaptation state, which is never saved.
+The UserProfile stores all calibrated values as plain JSON — it's the
+"fingerprint" of a user's eyes, blinks, mouth, and head orientation.
+PersonalModel wraps a profile at runtime to convert raw measurements
+into personalized ones (openness, relative pitch) and carries the
+guarded online adaptation state, which is never saved to disk.
+
+Author / Contributor: Praga
 """
 
 from __future__ import annotations
@@ -81,6 +85,19 @@ def pose_design(dp: np.ndarray, dy: np.ndarray) -> np.ndarray:
 
 
 class PersonalModel:
+    """Runtime wrapper that turns raw face measurements into personal coordinates.
+    
+    Key transformations:
+    - rel_pitch/rel_yaw: subtract the user's neutral pose so 0 = facing camera
+    - expected_open_ear: what the EAR SHOULD be at this head angle (pose model)
+    - openness: how open the eye is relative to this person's range [0=closed, 1=open]
+    - adapt: slow online drift correction for lighting/posture changes
+    
+    The pose model (a polynomial) was fitted during calibration by having
+    the user look in different directions, learning how their EAR changes with
+    head angle — this is what prevents false alarms when looking at a phone.
+    """
+
     def __init__(self, profile: UserProfile, use_pose_norm: bool = True):
         self.p = profile
         self.use_pose_norm = use_pose_norm
@@ -88,12 +105,15 @@ class PersonalModel:
         self.pitch_offset = 0.0
 
     def rel_pitch(self, raw_pitch: float) -> float:
+        """Convert raw pitch to person-relative degrees (positive = tilted downward)."""
         return self.p.pitch_sign * (raw_pitch - self.p.pitch_neutral) - self.pitch_offset
 
     def rel_yaw(self, raw_yaw: float) -> float:
+        """Convert raw yaw to person-relative degrees (0 = centered)."""
         return raw_yaw - self.p.yaw_neutral
 
     def expected_open_ear(self, rel_pitch: float, rel_yaw: float) -> float:
+        """Predict expected open-eye EAR at the current head orientation."""
         span = self.p.ear_open - self.p.ear_closed
         if self.use_pose_norm:
             dp = float(np.clip(rel_pitch, *C.POSE_PITCH_RANGE))
@@ -105,6 +125,10 @@ class PersonalModel:
         return float(np.clip(ref, self.p.ear_closed + 0.3 * span, self.p.ear_open + 0.5 * span))
 
     def openness(self, ear: float, rel_pitch: float, rel_yaw: float) -> float:
+        """Scale EAR to [0, 1] using this person's closed and expected-open values.
+        
+        Values above 1.0 are possible (capped at 1.5) if eyes are wider than normal.
+        """
         ref = self.expected_open_ear(rel_pitch, rel_yaw)
         return float(np.clip((ear - self.p.ear_closed) / (ref - self.p.ear_closed), 0.0, 1.5))
 
@@ -112,6 +136,8 @@ class PersonalModel:
         """Follow slow drift (lighting, posture). Call only while confidently alert."""
         span = self.p.ear_open - self.p.ear_closed
         rp = self.rel_pitch(raw_pitch)
+        # Compute how far the current EAR is from what the model predicts.
+        # Slowly shift the model toward this value (exponential moving average).
         residual = ear - self.expected_open_ear(rp, rel_yaw)
         a = 1.0 - math.exp(-dt / C.ADAPT_TAU_EAR)
         lim = C.ADAPT_MAX_EAR_FRAC * span

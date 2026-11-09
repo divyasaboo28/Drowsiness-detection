@@ -1,4 +1,11 @@
-"""Per-frame geometric features from MediaPipe face landmarks."""
+"""Per-frame geometric features extracted from MediaPipe face landmarks.
+
+This module computes Eye Aspect Ratio (EAR), Mouth Aspect Ratio (MAR),
+and head pose (pitch/yaw/roll) from the 478-point face mesh. These
+features are the raw inputs to calibration and all detection systems.
+
+Author / Contributor: Praga
+"""
 
 from __future__ import annotations
 
@@ -18,6 +25,12 @@ CACHE_FIELDS = (
 
 @dataclass
 class FrameFeatures:
+    """Container for all per-frame measurements extracted from one video frame.
+    
+    EAR (Eye Aspect Ratio): ratio of eye height to width — drops when eyes close.
+    MAR (Mouth Aspect Ratio): ratio of mouth height to width — rises during yawns.
+    Pitch/Yaw/Roll: head orientation in degrees from MediaPipe's face transform.
+    """
     t: float
     ear_l: float
     ear_r: float
@@ -42,6 +55,8 @@ def eye_aspect_ratio(pts: np.ndarray, idx: tuple[int, ...]) -> tuple[float, floa
     width = _dist(p1, p4)
     if width < 1e-6:
         return 0.0, 0.0
+    # EAR formula: average of two vertical distances divided by the horizontal distance.
+    # EAR ≈ 0.3 when open, drops toward 0 when the eye closes.
     return (_dist(p2, p6) + _dist(p3, p5)) / (2.0 * width), width
 
 
@@ -49,6 +64,8 @@ def mouth_aspect_ratio(pts: np.ndarray) -> float:
     width = _dist(pts[C.MOUTH_CORNERS[0]], pts[C.MOUTH_CORNERS[1]])
     if width < 1e-6:
         return 0.0
+    # Average the three vertical mouth distances and normalize by mouth width.
+    # MAR rises significantly during yawns (>0.5) vs normal speech (<0.3).
     vertical = sum(_dist(pts[a], pts[b]) for a, b in C.MOUTH_VERTICAL)
     return vertical / (len(C.MOUTH_VERTICAL) * width)
 
@@ -74,6 +91,8 @@ def from_points(
     # When the head turns, the far eye is foreshortened and less reliable,
     # so weight each eye by its apparent width.
     ear = (ear_l * w_l + ear_r * w_r) / (w_l + w_r) if (w_l + w_r) > 0 else 0.0
+    # Optionally include MediaPipe blendshape scores (eyeBlink, jawOpen)
+    # for the blendshape baseline detector.
     bs = blendshapes or {}
     return FrameFeatures(
         t=t,
@@ -96,6 +115,7 @@ def from_mediapipe(result, width: int, height: int, t: float) -> FrameFeatures |
     if not result.face_landmarks:
         return None
     lms = result.face_landmarks[0]
+    # Convert normalized [0,1] landmark coordinates to pixel coordinates
     pts = np.array([(lm.x * width, lm.y * height) for lm in lms], dtype=np.float32)
     if result.facial_transformation_matrixes:
         pose = euler_from_matrix(result.facial_transformation_matrixes[0])

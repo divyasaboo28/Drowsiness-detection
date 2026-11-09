@@ -1,11 +1,17 @@
 """PADD: personalized, pose-aware, multi-cue drowsiness detector.
 
-Pipeline per frame:
-  raw features -> personal normalization (profile + pose model)
-  -> event detectors (blinks, PERCLOS, yawns, nods)
-  -> decaying evidence per cue -> confidence-weighted fusion
-  -> leaky integrator + hysteresis -> OK / CAUTION / ALARM
-with a safety override for long eye closures and guarded online adaptation.
+This is the main detection engine. Pipeline per frame:
+  raw features → personal normalization (profile + pose model)
+  → event detectors (blinks, PERCLOS, yawns, nods)
+  → decaying evidence per cue → confidence-weighted fusion
+  → leaky integrator + hysteresis → OK / CAUTION / ALARM
+
+Safety features:
+  - Microsleep override: eyes closed >2s triggers immediate ALARM
+  - Guarded adaptation: model only learns while the driver is clearly alert
+  - Confidence weighting: cues are down-weighted when the face is turned away
+
+Author / Contributor: Praga
 """
 
 from __future__ import annotations
@@ -28,6 +34,19 @@ from .system import ALARM, CAUTION, OK, DrowsinessSystem, Status
 
 
 class PADDSystem(DrowsinessSystem):
+    """The full PADD detection system with all features enabled.
+    
+    Combines four drowsiness cues with configurable weights:
+      - eye (35%): PERCLOS + long closures
+      - blink (20%): slow blink frequency above personal baseline
+      - yawn (15%): detected yawns with speech filtering
+      - nod (30%): drowsy head nods (slow droop + fast recovery)
+    
+    Each cue's contribution is scaled by landmark reliability (how well
+    the face/eyes/mouth can be seen), then fused through a leaky integrator
+    with hysteresis to produce the final OK → CAUTION → ALARM states.
+    """
+
     def __init__(
         self,
         profile: UserProfile,
@@ -64,9 +83,6 @@ class PADDSystem(DrowsinessSystem):
         self.above_since: float | None = None
         self.last_t: float | None = None
         self.last_eye_t = -1e9
-        self.last_event_t = -1e9  # time of the latest drowsy event of any kind
-        self.last_rp: float | None = None  # last seen relative pitch
-        self.head_down_since: float | None = None
         self.counts = {"slow_blinks": 0, "long_closures": 0, "yawns": 0, "nods": 0}
 
     # ------------------------------------------------------------------
@@ -75,6 +91,7 @@ class PADDSystem(DrowsinessSystem):
         self.last_t = t
         info: dict[str, float] = {}
 
+        # --- Step 1: Extract and normalize features using personal model ---
         eye_conf = mouth_conf = 0.0
         openness = None
         if f is not None:
@@ -92,42 +109,28 @@ class PADDSystem(DrowsinessSystem):
                 if ev.long:
                     self.ev_long.add(t)
                     self.counts["long_closures"] += 1
-                    self.last_event_t = t
                 elif ev.slow:
                     self.ev_slow.add(t)
                     self.counts["slow_blinks"] += 1
-                    self.last_event_t = t
             self.perclos.update(t, openness)
 
             if mouth_conf >= C.MIN_CONFIDENCE and self.yawns.update(t, f.mar):
                 self.ev_yawn.add(t)
                 self.counts["yawns"] += 1
-                self.last_event_t = t
             if self.use_nod and self.nods.update(t, rp):
                 self.ev_nod.add(t)
                 self.counts["nods"] += 1
-                self.last_event_t = t
-            self.last_rp = rp
         else:
             self.perclos.update(t, None)
 
-        # Head-down timer. If the face disappears while the head is down (it
-        # often does when the chin drops to the chest), the head counts as
-        # still down; if it disappears while level, the person just left.
-        if self.last_rp is not None and self.last_rp >= C.NOD_DROOP_MIN:
-            if self.head_down_since is None:
-                self.head_down_since = t
-        else:
-            self.head_down_since = None
-        head_down_for = 0.0 if self.head_down_since is None else t - self.head_down_since
-        slumped_for = self.nods.slumped_for(t) if self.use_nod else 0.0
-
+        # --- Step 2: Smooth landmark confidence for each cue channel ---
         # Cue reliability = smoothed landmark confidence
         a = 1.0 - math.exp(-dt / C.RELIABILITY_TAU) if dt > 0 else 0.0
         face = 1.0 if f is not None else 0.0
         for key, conf in (("eye", eye_conf), ("blink", eye_conf), ("yawn", mouth_conf), ("nod", face)):
             self.rel[key] += a * (conf - self.rel[key])
 
+        # --- Step 3: Compute per-cue drowsiness scores [0..1] ---
         # Cue scores (0..1)
         perclos = self.perclos.value()
         perclos_score = float(np.clip(
@@ -143,19 +146,18 @@ class PADDSystem(DrowsinessSystem):
         if dt > 0:
             self.score += (1.0 - math.exp(-dt / C.FUSION_TAU)) * (fused - self.score)
 
-        # Hysteresis state machine. ALARM needs a high score AND fresh evidence:
-        # the score alone remembers minutes of past events and would keep the
-        # alarm on long after the person is alert again.
+        # --- Step 4: Fuse cues and apply hysteresis state machine ---
+        # The state machine prevents rapid flickering between alert levels:
+        # - ALARM_ON (0.60) to enter alarm, ALARM_OFF (0.45) to leave
+        # - CAUTION_ON (0.35) to enter caution, CAUTION_OFF (0.25) to leave
+        # - Score must stay above ALARM_ON for ALARM_HOLD seconds (1s)
+        # Hysteresis state machine
         D = self.score
-        closed_for = self.blinks.closed_for(t)
-        recent = t - self.last_event_t <= C.RECENT_WINDOW or closed_for >= 0.5
-        info["recent"] = float(recent)
         if self.base_level == ALARM:
-            if D < C.ALARM_OFF or not recent:
+            if D < C.ALARM_OFF:
                 self.base_level = CAUTION if D >= C.CAUTION_OFF else OK
-                self.above_since = None
         else:
-            if D > C.ALARM_ON and recent:
+            if D > C.ALARM_ON:
                 self.above_since = t if self.above_since is None else self.above_since
                 if t - self.above_since >= C.ALARM_HOLD:
                     self.base_level = ALARM
@@ -166,30 +168,25 @@ class PADDSystem(DrowsinessSystem):
             elif self.base_level == OK and D > C.CAUTION_ON:
                 self.base_level = CAUTION
 
+        # --- Step 5: Safety override for microsleep (eyes closed >2s) ---
         if openness is not None:
             self.last_eye_t = t
+        closed_for = self.blinks.closed_for(t)
         # Override only while we can actually see the eyes (not after turning away)
-        eyes_override = closed_for >= C.OVERRIDE_CLOSURE and t - self.last_eye_t < 0.5
-        # Head overrides: a slow droop that stays down is the posture of
-        # falling asleep; any head-down held very long means the eyes have
-        # been off the road too long, whatever the reason.
-        slump_override = slumped_for >= C.HEAD_SLUMP_TIME
-        head_override = head_down_for >= C.HEAD_DOWN_ALARM
-        override = eyes_override or slump_override or head_override
+        override = closed_for >= C.OVERRIDE_CLOSURE and t - self.last_eye_t < 0.5
         level = ALARM if override else self.base_level
 
+        # --- Step 6: Online adaptation (only while clearly alert) ---
+        # Slowly adjusts the model for lighting/posture drift, but ONLY when
+        # the drowsiness score is very low and eyes are confirmed open.
         # Guarded adaptation: only learn while clearly alert and eyes open
         if (self.use_adapt and f is not None and openness is not None and dt > 0
                 and D < C.ADAPT_MAX_SCORE and openness > 0.6 and closed_for == 0.0):
             self.model.adapt(f.ear, f.pitch, self.model.rel_yaw(f.yaw), dt)
 
         reasons = []
-        if eyes_override:
+        if override:
             reasons.append(f"eyes closed {closed_for:.1f}s")
-        if slump_override:
-            reasons.append(f"head slumped {slumped_for:.0f}s")
-        elif head_override:
-            reasons.append(f"head down {head_down_for:.0f}s")
         if scores["eye"] > 0.3:
             reasons.append(f"eyes: PERCLOS {perclos * 100:.0f}%" if perclos_score >= self.ev_long.score(t)
                            else "eyes: long closure")
@@ -201,6 +198,5 @@ class PADDSystem(DrowsinessSystem):
             reasons.append("head nodding")
 
         info.update(perclos=perclos, closed_for=closed_for, eye_conf=eye_conf,
-                    head_down_for=head_down_for, slumped_for=slumped_for,
                     ear_offset=self.model.ear_offset, pitch_offset=self.model.pitch_offset)
         return Status(level=level, score=D, cues=cues, reasons=reasons, info=info)

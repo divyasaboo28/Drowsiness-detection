@@ -179,12 +179,11 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
-# PADD: personal data and downloaded files stay out of Git
-models/
+
+# Project generated artifacts (webcam recordings, local profiles, models)
 profiles/
 sessions/
-screenshots/
 results/
-*.mp4
-*.avi
-*.mkv
+screenshots/
+models/
+.pytest_cache/

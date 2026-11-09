@@ -1,8 +1,15 @@
-"""Baselines that PADD is compared against.
+"""Baseline detection systems that PADD is compared against in evaluation.
 
-A  FixedThresholdSystem     - the classic tutorial rule, same numbers for everyone
-B  PersonalThresholdSystem  - same rule, but with the user's calibrated eye scale
-BS BlendshapeSystem         - MediaPipe's own eyeBlink / jawOpen scores, fixed cut-offs
+Three baselines of increasing sophistication:
+  A. FixedThresholdSystem:    Classic one-size-fits-all EAR < 0.22 rule
+  B. PersonalThresholdSystem: Same rule but with calibrated eye scale
+  BS. BlendshapeSystem:       Uses MediaPipe's own eyeBlink/jawOpen scores
+
+All use the same simple logic: alarm if eyes closed for 1.6s or mouth
+open for 1.0s. The comparison shows how much personalization + pose
+normalization + multi-cue fusion improves over these simpler approaches.
+
+Author / Contributor: Praga
 """
 
 from __future__ import annotations
@@ -14,8 +21,13 @@ from .system import ALARM, OK, DrowsinessSystem, Status
 
 
 class _SustainedRule(DrowsinessSystem):
-    """Alarm while `eye_closed` has been true for EYE_SECONDS, or for a few
-    seconds after `mouth_open` has been true for YAWN_SECONDS."""
+    """Base class for simple threshold-based detection.
+    
+    Logic: track how long the eyes have been closed and how long the
+    mouth has been open. Trigger ALARM if either exceeds its time limit.
+    After a yawn, the alarm stays active for YAWN_ALARM_HOLD seconds
+    to avoid the alarm disappearing the instant the mouth closes.
+    """
 
     eye_seconds = C.BASE_EYE_CLOSED_SECONDS
 
@@ -26,6 +38,7 @@ class _SustainedRule(DrowsinessSystem):
         self.yawn_alarm_until = -1.0
 
     def _measure(self, f: FrameFeatures) -> tuple[bool, bool, dict[str, float]]:
+        """Return (eye_closed, mouth_open, debug_info_dict)."""
         raise NotImplementedError
 
     def _update(self, f: FrameFeatures | None, t: float) -> Status:
@@ -35,10 +48,12 @@ class _SustainedRule(DrowsinessSystem):
             return Status(level=level, score=0.0)
 
         eye_closed, mouth_open, info = self._measure(f)
+        # Track continuous eye closure duration
         if eye_closed:
             self.eye_since = t if self.eye_since is None else self.eye_since
         else:
             self.eye_since = None
+        # Track continuous mouth opening (yawn) duration
         if mouth_open:
             self.mouth_since = t if self.mouth_since is None else self.mouth_since
             if t - self.mouth_since >= C.BASE_YAWN_SECONDS:
@@ -62,6 +77,7 @@ class _SustainedRule(DrowsinessSystem):
 
 
 class FixedThresholdSystem(_SustainedRule):
+    """Baseline A: Fixed generic EAR threshold (0.22) and MAR threshold (0.5)."""
     name = f"Baseline (fixed EAR<{C.BASE_EAR_THRESHOLD})"
     short = "baseline_fixed"
 
@@ -74,7 +90,7 @@ class FixedThresholdSystem(_SustainedRule):
 
 
 class PersonalThresholdSystem(_SustainedRule):
-    """Personal calibration only: no pose normalization, no fusion."""
+    """Baseline B: Personal calibrated eye scale, but without head pose normalization."""
 
     name = "Personal threshold only"
     short = "baseline_personal"
@@ -94,6 +110,7 @@ class PersonalThresholdSystem(_SustainedRule):
 
 
 class BlendshapeSystem(_SustainedRule):
+    """Baseline: Uses MediaPipe's built-in facial blendshapes (eyeBlink, jawOpen)."""
     name = "MediaPipe blendshapes (fixed)"
     short = "baseline_blendshape"
 

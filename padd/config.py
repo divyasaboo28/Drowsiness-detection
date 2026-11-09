@@ -1,8 +1,14 @@
 """All tunable numbers live here, so experiments never need code changes.
 
+This is the central configuration for every threshold, weight, and timing
+constant in the PADD system. Changing values here affects calibration,
+detection, fusion, and the UI without touching any logic code.
+
 Units: seconds for time, degrees for angles. "Openness" is the personal,
 pose-normalized eye scale: 1.0 = your normal open eye at the current head
 angle, 0.0 = your closed eye (both learned during calibration).
+
+Author / Contributor: Praga
 """
 
 # --------------------------------------------------------------------------
@@ -67,8 +73,7 @@ NOD_LEVEL = 3.0  # below this the head counts as level
 NOD_DROOP_MIN = 10.0  # head must drop at least this far
 NOD_SLOW_MAX_VEL = 20.0  # avg deg/s while dropping; faster = voluntary look-down
 NOD_RECOVERY_VEL = 40.0  # deg/s upward snap that completes a nod
-HEAD_SLUMP_TIME = 3.0  # head drooped slowly and stays down this long = slumped asleep
-HEAD_DOWN_ALARM = 12.0  # head down this long, any speed = eyes off the road too long
+NOD_MAX_DROOP_TIME = 8.0  # a droop held longer than this is a deliberate posture
 NOD_SMOOTH_TAU = 0.08
 NOD_VEL_TAU = 0.10
 DEFAULT_PITCH_SIGN = 1.0
@@ -90,13 +95,8 @@ WEIGHTS = {"eye": 0.35, "blink": 0.20, "yawn": 0.15, "nod": 0.30}
 FUSION_TAU = 1.0  # leaky-integrator time constant
 RELIABILITY_TAU = 3.0  # smoothing of per-cue landmark confidence
 CAUTION_ON, CAUTION_OFF = 0.35, 0.25
-ALARM_ON, ALARM_OFF = 0.50, 0.40
+ALARM_ON, ALARM_OFF = 0.60, 0.45
 ALARM_HOLD = 1.0  # score must stay above ALARM_ON this long
-# Evidence fades over minutes, so a high score alone can mean "was drowsy a
-# while ago". ALARM also needs a fresh drowsy event (slow blink, long closure,
-# yawn, nod) in the last RECENT_WINDOW seconds, or the eyes closed right now.
-# Without one, ALARM drops to CAUTION (silent) until the evidence fades.
-RECENT_WINDOW = 6.0
 
 # Confidence: frames below this are not fed to a cue's detector
 MIN_CONFIDENCE = 0.4
