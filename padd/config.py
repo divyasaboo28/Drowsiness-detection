@@ -67,7 +67,8 @@ NOD_LEVEL = 3.0  # below this the head counts as level
 NOD_DROOP_MIN = 10.0  # head must drop at least this far
 NOD_SLOW_MAX_VEL = 20.0  # avg deg/s while dropping; faster = voluntary look-down
 NOD_RECOVERY_VEL = 40.0  # deg/s upward snap that completes a nod
-NOD_MAX_DROOP_TIME = 8.0  # a droop held longer than this is a deliberate posture
+HEAD_SLUMP_TIME = 3.0  # head drooped slowly and stays down this long = slumped asleep
+HEAD_DOWN_ALARM = 12.0  # head down this long, any speed = eyes off the road too long
 NOD_SMOOTH_TAU = 0.08
 NOD_VEL_TAU = 0.10
 DEFAULT_PITCH_SIGN = 1.0

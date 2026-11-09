@@ -200,6 +200,10 @@ class NodDetector:
     def reset(self, t: float) -> None:
         self.state, self.p, self.vel, self.last_t, self.t_level = "level", None, 0.0, t, t
 
+    def slumped_for(self, t: float) -> float:
+        """Seconds the head has stayed down after a slow (drowsy) droop."""
+        return t - self.t_droop if self.state == "droop" else 0.0
+
     def update(self, t: float, rel_pitch: float | None) -> NodEvent | None:
         if rel_pitch is None:
             return None
@@ -232,8 +236,8 @@ class NodDetector:
                 return NodEvent(t, self.peak)
             if p < C.NOD_LEVEL:
                 self.state, self.t_level = "level", t
-            elif t - self.t_droop > C.NOD_MAX_DROOP_TIME:
-                self.state = "lookdown"
+            # A slow droop that stays down is a slump, not a deliberate posture:
+            # it stays in "droop" and slumped_for() keeps growing.
         elif self.state == "lookdown":
             if p < C.NOD_LEVEL:
                 self.state, self.t_level = "level", t

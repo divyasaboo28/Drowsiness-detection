@@ -65,6 +65,8 @@ class PADDSystem(DrowsinessSystem):
         self.last_t: float | None = None
         self.last_eye_t = -1e9
         self.last_event_t = -1e9  # time of the latest drowsy event of any kind
+        self.last_rp: float | None = None  # last seen relative pitch
+        self.head_down_since: float | None = None
         self.counts = {"slow_blinks": 0, "long_closures": 0, "yawns": 0, "nods": 0}
 
     # ------------------------------------------------------------------
@@ -105,8 +107,20 @@ class PADDSystem(DrowsinessSystem):
                 self.ev_nod.add(t)
                 self.counts["nods"] += 1
                 self.last_event_t = t
+            self.last_rp = rp
         else:
             self.perclos.update(t, None)
+
+        # Head-down timer. If the face disappears while the head is down (it
+        # often does when the chin drops to the chest), the head counts as
+        # still down; if it disappears while level, the person just left.
+        if self.last_rp is not None and self.last_rp >= C.NOD_DROOP_MIN:
+            if self.head_down_since is None:
+                self.head_down_since = t
+        else:
+            self.head_down_since = None
+        head_down_for = 0.0 if self.head_down_since is None else t - self.head_down_since
+        slumped_for = self.nods.slumped_for(t) if self.use_nod else 0.0
 
         # Cue reliability = smoothed landmark confidence
         a = 1.0 - math.exp(-dt / C.RELIABILITY_TAU) if dt > 0 else 0.0
@@ -155,7 +169,13 @@ class PADDSystem(DrowsinessSystem):
         if openness is not None:
             self.last_eye_t = t
         # Override only while we can actually see the eyes (not after turning away)
-        override = closed_for >= C.OVERRIDE_CLOSURE and t - self.last_eye_t < 0.5
+        eyes_override = closed_for >= C.OVERRIDE_CLOSURE and t - self.last_eye_t < 0.5
+        # Head overrides: a slow droop that stays down is the posture of
+        # falling asleep; any head-down held very long means the eyes have
+        # been off the road too long, whatever the reason.
+        slump_override = slumped_for >= C.HEAD_SLUMP_TIME
+        head_override = head_down_for >= C.HEAD_DOWN_ALARM
+        override = eyes_override or slump_override or head_override
         level = ALARM if override else self.base_level
 
         # Guarded adaptation: only learn while clearly alert and eyes open
@@ -164,8 +184,12 @@ class PADDSystem(DrowsinessSystem):
             self.model.adapt(f.ear, f.pitch, self.model.rel_yaw(f.yaw), dt)
 
         reasons = []
-        if override:
+        if eyes_override:
             reasons.append(f"eyes closed {closed_for:.1f}s")
+        if slump_override:
+            reasons.append(f"head slumped {slumped_for:.0f}s")
+        elif head_override:
+            reasons.append(f"head down {head_down_for:.0f}s")
         if scores["eye"] > 0.3:
             reasons.append(f"eyes: PERCLOS {perclos * 100:.0f}%" if perclos_score >= self.ev_long.score(t)
                            else "eyes: long closure")
@@ -177,5 +201,6 @@ class PADDSystem(DrowsinessSystem):
             reasons.append("head nodding")
 
         info.update(perclos=perclos, closed_for=closed_for, eye_conf=eye_conf,
+                    head_down_for=head_down_for, slumped_for=slumped_for,
                     ear_offset=self.model.ear_offset, pitch_offset=self.model.pitch_offset)
         return Status(level=level, score=D, cues=cues, reasons=reasons, info=info)

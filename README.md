@@ -111,7 +111,7 @@ This installs MediaPipe, OpenCV, NumPy, SciPy, Matplotlib and pytest, about 150 
 pytest
 ```
 
-You should see `10 passed`. This tests the detection logic on a synthetic person.
+You should see `12 passed`. This tests the detection logic on a synthetic person.
 
 ### Step 6: Calibrate yourself (~90 seconds)
 
@@ -329,6 +329,7 @@ experiment. Main groups:
 | Blinks | `LONG_CLOSURE_MIN = 1.0`, `OVERRIDE_CLOSURE = 2.0` | Long closure and safety-override durations |
 | Yawns | `YAWN_MIN_DURATION = 1.2`, `YAWN_MAX_OSC_RATE` | Minimum yawn length; how much zig-zag counts as talking |
 | Nods | `NOD_DROOP_MIN = 10`, `NOD_SLOW_MAX_VEL = 20`, `NOD_RECOVERY_VEL = 40` | Degrees and degrees/second for the nod signature |
+| Head down | `HEAD_SLUMP_TIME = 3`, `HEAD_DOWN_ALARM = 12` | Seconds a slow droop may stay down (slump), and seconds any head-down may last, before ALARM |
 | Evidence | `TAU_*`, `FULL_*` | How long each event "counts" and how many events saturate a cue |
 | Fusion | `WEIGHTS`, `CAUTION_ON/OFF`, `ALARM_ON/OFF`, `ALARM_HOLD`, `RECENT_WINDOW` | Cue weights, alert thresholds with hysteresis, and how fresh the evidence must be for ALARM |
 | Confidence | `YAW_FULL_CONF`, `YAW_ZERO_CONF` | How much head turning reduces trust in the eyes/mouth |
@@ -409,7 +410,7 @@ Passing `None` means "no reliable reading this frame".
 | `BlinkDetector` | Blinks, slow blinks, long closures | A state machine on openness: *open → closed* (below 0.35) → *reopening* (above 0.5) → *open* (above 0.8). It measures closed time and reopening time. **Slow** = longer than your 95th percentile, or slower to reopen. **Long** = at least 1 s. `closed_for(t)` gives the current closure length for the safety override. |
 | `PerclosTracker` | PERCLOS | Share of the last 60 s with openness below 0.2 (eyes at least 80% closed) |
 | `YawnDetector` | Yawns | MAR above your threshold for at least 1.2 s. It then counts direction changes in the mouth signal; more than 2 per second means **talking**, which is rejected. |
-| `NodDetector` | Drowsy head nods (**N3**) | Smooths pitch and computes velocity. It enters *droop* only if the head went from level to 10° down **slowly** (≤ 20°/s average). A fast drop is a deliberate *look-down* and is ignored. A nod is counted when a droop ends with a **fast** upward snap (≥ 40°/s). |
+| `NodDetector` | Drowsy head nods (**N3**) | Smooths pitch and computes velocity. It enters *droop* only if the head went from level to 10° down **slowly** (≤ 20°/s average). A fast drop is a deliberate *look-down* and is ignored. A nod is counted when a droop ends with a **fast** upward snap (≥ 40°/s). A droop that stays down is a *slump*; `slumped_for()` reports how long. |
 | `DecayingEvidence` | Turns events into a 0–1 score | Each event adds `exp(-age/τ)`. Your resting rate is subtracted, and the result is divided by a saturation count. |
 | `direction_changes()` | Helper | Counts zig-zags larger than a given amplitude |
 
@@ -442,7 +443,10 @@ What `update()` does every frame:
    - CAUTION when the score goes above 0.35; back to OK below 0.25
    - ALARM when the score stays above 0.50 for 1 s **and** there was a drowsy event (slow blink, long closure, yawn, nod) in the last 6 s or the eyes are closed now; leaves ALARM below 0.40
    - With no fresh event for 6 s, ALARM drops to the silent CAUTION level. Evidence is remembered for minutes, so without this rule the alarm would stay on long after you are alert again
-6. **Override**: eyes closed for 2 s or more → ALARM regardless, but only while the eyes are actually visible
+6. **Override**: ALARM regardless of the score when
+   - the eyes are closed for 2 s or more (only while the eyes are actually visible), or
+   - the head drooped **slowly** and has stayed down for 3 s (a slump: falling asleep), or
+   - the head has been down for 12 s, however it got there (eyes off the road too long). If the face disappears while the head is down, which happens when the chin drops to the chest, the head counts as still down
 7. **Adapt**: only when the score is below 0.15, the eyes are open and nothing is closing
 8. **Explain**: builds the "Why:" reasons and the overlay numbers
 
@@ -512,6 +516,9 @@ when looking down, and whose head-pitch sign is reversed. No camera is needed. T
 | `test_phone_glance_fools_baseline_but_not_padd` | **The core claim**: Baseline A alarms on a phone glance; PADD does not |
 | `test_talking_is_not_a_yawn` | 30 s of talking produces no yawns |
 | `test_drowsy_episode_raises_alarm` | Slow blinks + yawn + nod + long closure → ALARM, with no alarm before the episode |
+| `test_alarm_turns_off_after_recovery` | After yawns, nods and slow blinks, the alarm turns off within seconds once you look alert |
+| `test_head_slump_raises_alarm` | Head droops slowly and stays down → ALARM about 3 s later |
+| `test_head_down_too_long_raises_alarm_even_if_face_is_lost` | A 10 s phone glance is fine; a 12 s head-down alarms, even after the face is lost |
 | `test_microsleep_override` | A 2.5 s closure alarms 2.0–2.2 s after the eyes close |
 | `test_nod_detector_separates_nod_from_look_down` | Slow droop + snap = 1 nod; fast look-down + hold = 0 |
 | `test_yawn_detector` | Accepts a yawn, rejects talking |
@@ -544,7 +551,9 @@ score = smooth( Σ weight × reliability × cue_score )
 CAUTION   score > 0.35          (back to OK below 0.25)
 ALARM     score > 0.50 for 1 s  and a drowsy event in the last 6 s
           (back down below 0.40, or to CAUTION after 6 s with no new event)
-OVERRIDE  eyes closed ≥ 2 s  →  ALARM immediately
+OVERRIDE  eyes closed ≥ 2 s             →  ALARM immediately
+          slow head droop, down ≥ 3 s   →  ALARM (head slumped)
+          head down ≥ 12 s, any speed   →  ALARM (eyes off the road)
 ```
 
 No single cue can reach ALARM on its own (the largest weight is 0.35), so several signs must

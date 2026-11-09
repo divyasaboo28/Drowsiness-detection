@@ -175,6 +175,39 @@ def test_alarm_turns_off_after_recovery(profile):
     assert all(s.level != ALARM for s in statuses[int(55 * FPS):])
 
 
+def test_head_slump_raises_alarm(profile):
+    """Head droops slowly and stays down (eyes open or not): falling asleep."""
+    def fn(t):
+        if t >= 10:
+            return {"factor": blink_factor(t), "dp": 25.0 * min(1.0, (t - 10) / 3.0)}
+        return normal(t)
+
+    padd = PADDSystem(profile)
+    statuses = run(padd, stream(25, fn))
+    assert all(s.level != ALARM for s in statuses[: int(10 * FPS)])
+    # 10 deg is reached at t = 11.2 s; slump alarm 3 s later
+    first = next(i for i, s in enumerate(statuses) if s.level == ALARM) / FPS
+    assert 14.0 <= first <= 15.0
+    assert all(s.level == ALARM for s in statuses[int(16 * FPS):])
+
+
+def test_head_down_too_long_raises_alarm_even_if_face_is_lost(profile):
+    """A fast look-down is not a slump, but held for 12 s it still alarms,
+    also when the face tracker loses the face with the chin on the chest."""
+    def fn(t):
+        if t >= 10:
+            return {"factor": blink_factor(t), "dp": 25.0 * min(1.0, (t - 10) / 0.15)}
+        return normal(t)
+
+    padd = PADDSystem(profile)
+    levels = []
+    for f in stream(30, fn):
+        face = None if f.t >= 15 else f  # face lost 5 s into the look-down
+        levels.append(padd.update(face, f.t).level)
+    assert all(lv != ALARM for lv in levels[: int(21.5 * FPS)])  # 10 s phone glance is fine
+    assert all(lv == ALARM for lv in levels[int(22.5 * FPS):])
+
+
 def test_microsleep_override(profile):
     def fn(t):
         return {"factor": 0.0} if 10 <= t < 12.5 else normal(t)
