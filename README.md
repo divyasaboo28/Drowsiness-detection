@@ -8,6 +8,21 @@ That rule fires constantly for people with naturally narrow eyes, misses people 
 and treats glancing down at a phone as "eyes closing". PADD fixes this with a 90-second
 personal calibration and several cues that must agree.
 
+**Contributors:** Divya, Pragati Khandelwal (Praga)
+
+### Overview
+
+Traditional drowsiness detectors rely on fixed, one-size-fits-all geometric thresholds
+(such as `EAR < 0.22`). These rules cause false alarms in everyday driving:
+- Looking down at a dashboard display or phone narrows the eyes naturally, falsely triggering alarms.
+- Talking or singing causes large mouth movements, falsely triggering yawn detectors.
+- Natural eye size varies widely across people: someone with narrow eyes may trigger constant alerts.
+
+PADD solves this with three layers:
+1. **Personal calibration:** learns each driver's eye open/closed scale, blink habits, resting posture and yawn width in a ~90-second guided session.
+2. **Pose-aware normalization:** fits a small regression model relating eye aspect ratio to head pitch and yaw, so looking down is not mistaken for closing the eyes.
+3. **Multi-cue evidence fusion:** combines four drowsiness signs (PERCLOS, slow blinks, yawns, head nods) with confidence weighting and hysteresis, plus safety overrides for closed eyes and a slumped head, and a separate soft "eyes on the road" warning for distraction.
+
 ```
 Webcam → MediaPipe Face Landmarker (478 landmarks + head pose)
        → features: EAR, MAR, pitch/yaw

@@ -1,4 +1,14 @@
-"""OpenCV overlays, the split-screen comparison view, and the alarm beep."""
+"""OpenCV overlays, the split-screen comparison view, and the alarm beep.
+
+Provides all the visual feedback for the live detection window:
+  - Face landmark drawing (eyes in yellow, mouth in pink)
+  - Status banner with color-coded alert level (green/yellow/red)
+  - Per-cue progress bars and fused drowsiness score bar
+  - Alarm reason text at the bottom of the frame
+  - Non-blocking audio alerts using the system beeper
+
+Author / Contributor: Praga
+"""
 
 from __future__ import annotations
 
@@ -26,6 +36,7 @@ CUE_LABELS = {"eye": "Eyes", "blink": "Slow blinks", "yawn": "Yawns", "nod": "He
 
 
 def text(img, s, org, scale=0.55, color=WHITE, thick=1, bg=True):
+    """Draw anti-aliased text with an optional dark rectangle background."""
     (w, h), base = cv2.getTextSize(s, FONT, scale, thick)
     x, y = org
     if bg:
@@ -34,6 +45,7 @@ def text(img, s, org, scale=0.55, color=WHITE, thick=1, bg=True):
 
 
 def draw_landmarks(img, f: FrameFeatures | None) -> None:
+    """Draw eye contours (yellow dots) and mouth mesh (pink lines) onto image."""
     if f is None or f.points is None:
         return
     pts = f.points.astype(int)
@@ -47,6 +59,7 @@ def draw_landmarks(img, f: FrameFeatures | None) -> None:
 
 
 def draw_bar(img, x, y, w, h, value, color, label=None, vmax=1.0):
+    """Draw a horizontal progress/status bar with background and optional label."""
     cv2.rectangle(img, (x, y), (x + w, y + h), (60, 60, 60), -1)
     fill = int(w * float(np.clip(value / vmax, 0, 1)))
     cv2.rectangle(img, (x, y), (x + fill, y + h), color, -1)
@@ -55,6 +68,7 @@ def draw_bar(img, x, y, w, h, value, color, label=None, vmax=1.0):
 
 
 def draw_status(img, title: str, status: Status, alarms: int, show_cues: bool) -> None:
+    """Draw full PADD status overlay: top banner, metrics, cue bars, and reason string."""
     h, w = img.shape[:2]
     color = LEVEL_COLORS[status.level]
     # Banner
@@ -106,11 +120,13 @@ def draw_status(img, title: str, status: Status, alarms: int, show_cues: bool) -
 
 
 def side_by_side(left, right):
+    """Stack two camera panels side by side with a vertical separator bar."""
     sep = np.full((left.shape[0], 6, 3), 40, np.uint8)
     return np.hstack([left, sep, right])
 
 
 def fit_to_screen(img, max_w=1600):
+    """Downscale image if wider than max_w so it fits nicely on screen."""
     h, w = img.shape[:2]
     if w <= max_w:
         return img
@@ -130,7 +146,14 @@ def chime() -> None:
 
 
 class Beeper:
-    """Non-blocking, rate-limited alarm sound."""
+    """Non-blocking, rate-limited alarm sound player.
+    
+    Plays a loud warning beep while the system is in ALARM state (at most
+    once per BEEP_INTERVAL, 0.8s), and a short, soft beep for the
+    "eyes on the road" distraction warning (at most once per
+    DISTRACT_BEEP_INTERVAL, 1.5s). Runs the sound in a background thread
+    so it never blocks the video processing loop.
+    """
 
     def __init__(self, enabled: bool = True):
         self.enabled = enabled

@@ -1,8 +1,16 @@
-"""Guided personal calibration (about 90 s) and profile fitting.
+"""Guided personal calibration (~90 seconds) and profile fitting.
 
-fit_profile() only needs features grouped by phase, so the same code fits a
-profile live (run_calibration) and offline from a recorded session
+The calibration walks the user through 9 phases to learn their unique:
+  - Eye Aspect Ratio range (open vs closed)
+  - Blink patterns (rate, duration, reopen speed)
+  - Head pose mapping (how EAR changes when looking up/down/left/right)
+  - Mouth characteristics (rest, talking, yawning)
+
+fit_profile() only needs features grouped by phase, so the same code fits
+a profile live (run_calibration) and offline from a recorded session
 (evaluate.py).
+
+Author / Contributor: Praga
 """
 
 from __future__ import annotations
@@ -63,6 +71,16 @@ def _pct(values, q, default):
 
 
 def fit_profile(samples: PhaseSamples, name: str) -> UserProfile:
+    """Fit a personalized UserProfile from collected phase samples.
+    
+    Processes the raw features recorded during each calibration phase to compute:
+    1. Open and closed eye aspect ratios (with robust statistics).
+    2. Head pose neutral offsets and pitch coordinate direction.
+    3. Pose-normalized EAR model using regularized polynomial regression.
+    4. Personal blink dynamics (duration percentiles, slow-blink rate).
+    5. Baseline PERCLOS at rest.
+    6. Speech vs. yawn discrimination threshold for the mouth.
+    """
     warnings: list[str] = []
 
     for key, items in samples.items():
@@ -71,13 +89,16 @@ def fit_profile(samples: PhaseSamples, name: str) -> UserProfile:
             if found < 0.7:
                 warnings.append(f"face found in only {found:.0%} of '{key}' frames")
 
+    # --- Phase 1: Learn normal eye metrics from the rest phase ---
     rest = _valid(samples, "rest")
     if len(rest) < 60:
         raise ValueError("Not enough face frames in the rest phase; check lighting and camera position.")
     rest_ear = np.array([f.ear for f in rest])
 
     # --- eye scale: open and closed ---------------------------------------
-    ear_open = _pct(rest_ear, 55, 0.3)  # slightly above median: blinks pull it down
+    # Use 55th percentile instead of median so normal blinks don't depress the open EAR estimate
+    ear_open = _pct(rest_ear, 55, 0.3)
+    # Median Absolute Deviation (MAD) scaled by 1.4826 estimates normal standard deviation robustly
     ear_open_mad = float(np.median(np.abs(rest_ear - np.median(rest_ear))) * 1.4826)
     closed = np.array([f.ear for f in _valid(samples, "closed")])
     ear_closed = float(np.median(closed)) if len(closed) >= 15 else np.nan
@@ -113,6 +134,7 @@ def fit_profile(samples: PhaseSamples, name: str) -> UserProfile:
             pose_frames += fs
     n_pose_keys = sum(len(_valid(samples, k)) >= 10 for k in POSE_PHASES)
     coef = [ear_open, 0.0, 0.0, 0.0]
+    # Ridge regression: fit expected EAR as a function of pitch (linear + quad) and yaw
     if n_pose_keys >= 3 and len(pose_frames) >= 30:
         dp = np.array([pitch_sign * (f.pitch - pitch_neutral) for f in pts])
         dy = np.array([f.yaw - yaw_neutral for f in pts])
@@ -123,6 +145,7 @@ def fit_profile(samples: PhaseSamples, name: str) -> UserProfile:
     else:
         warnings.append("pose sweep incomplete; pose normalization disabled for this profile")
 
+    # --- Assemble the initial profile with all calibrated values ---
     profile = UserProfile(
         name=name,
         created=dt.datetime.now().isoformat(timespec="seconds"),
@@ -221,12 +244,14 @@ def draw_phase(img, phase: Phase, t_in: float, step: int, n_steps: int) -> None:
 
 def run_calibration(source, tracker, name: str, skip_yawn: bool = False,
                     window: str = "PADD calibration") -> UserProfile | None:
+    """Run interactive 9-phase calibration via GUI and return the fitted UserProfile."""
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
     cv2.setWindowProperty(window, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
     plan = phases(skip_yawn)
     samples: PhaseSamples = {p.key: [] for p in plan}
 
-    # Short get-ready countdown with a face check
+    # Wait for the user to be ready: show the camera feed and check for a face.
+    # Start the calibration phases only after a face has been visible for 3 seconds.
     t_ready = None
     while True:
         frame, t = source.read()

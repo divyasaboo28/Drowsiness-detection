@@ -1,13 +1,15 @@
 """PADD - Personalized Adaptive Drowsiness Detector.
 
-Usage:
-  python main.py calibrate --name alice          # ~90 s guided calibration
+Command-line interface for all system features:
+  python main.py calibrate --name alice          # ~90s guided calibration
   python main.py run       --name alice          # live detection with PADD
   python main.py compare   --name alice          # split screen: fixed baseline vs PADD
   python main.py record    --name alice          # record a labelled test session
   python main.py evaluate  --sessions sessions   # replay sessions, write results/
 
 Add --video path/to/file.mp4 to run/compare on a video instead of the webcam.
+
+Author / Contributor: Praga
 """
 
 from __future__ import annotations
@@ -52,6 +54,7 @@ def cmd_calibrate(args) -> None:
 
 
 def live_loop(args, systems, window: str) -> None:
+    """Core real-time processing loop used by run and compare commands."""
     from padd.landmarks import FaceTracker
     from padd.ui import Beeper, draw_landmarks, draw_status, fit_to_screen, side_by_side, text
 
@@ -63,8 +66,10 @@ def live_loop(args, systems, window: str) -> None:
             frame, t = src.read()
             if frame is None:
                 break
+            # Extract face landmarks and compute features for this frame
             f = tracker.process(frame, t)
             panels = []
+            # Run each detection system and render its status on a separate panel
             for system in systems:
                 status = system.update(f, t)
                 panel = frame.copy()
@@ -73,7 +78,9 @@ def live_loop(args, systems, window: str) -> None:
                 if f is None:
                     text(panel, "No face detected", (10, panel.shape[0] // 2), 0.8, (0, 210, 255), 2)
                 panels.append(panel)
-            beeper(status.level, status.distracted)  # sound follows the last panel (PADD)
+            # Sound follows the last panel (PADD): loud beep for ALARM,
+            # short soft beep for the "eyes on the road" distraction warning
+            beeper(status.level, status.distracted)
             view = panels[0] if len(panels) == 1 else side_by_side(*panels)
             cv2.imshow(window, fit_to_screen(view))
             key = cv2.waitKey(1) & 0xFF

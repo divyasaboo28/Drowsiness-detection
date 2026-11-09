@@ -1,12 +1,15 @@
-"""Offline evaluation: replay recorded sessions through every system.
+"""Offline evaluation: replay recorded sessions through every detection system.
 
-For each session folder (made by `python main.py record`):
-  1. extract features once (cached in features.npz),
-  2. fit that participant's profile from the recorded calibration segments,
-  3. replay the scripted part through baselines, PADD and its ablations,
-  4. score alarms against the labels.
+For each session folder (created by `python main.py record`):
+  1. Extract features once from the video (cached in features.npz for speed)
+  2. Fit the participant's personal profile from recorded calibration phases
+  3. Replay the scripted segments through all baselines, PADD, and ablations
+  4. Score alarms against ground-truth labels (alert vs drowsy segments)
 
-Outputs (in --out): per_session.csv, summary.csv, summary.md and charts.
+Outputs comparison metrics: recall, false alarm rate, detection latency,
+and false alarms broken down by category (phone, talk, mirror, laugh, normal).
+
+Author / Contributor: Praga
 """
 
 from __future__ import annotations
@@ -24,8 +27,12 @@ from .fusion import PADDSystem
 from .profile import UserProfile
 from .system import ALARM
 
-GRACE_AFTER_DROWSY = 10.0  # alarms this soon after a drowsy segment are not false
-DETECT_SLACK = 3.0  # an alarm up to this long after a drowsy segment still counts
+# Alarms within 10s after a drowsy segment are NOT counted as false alarms
+# (the driver may still look drowsy right after the segment boundary).
+GRACE_AFTER_DROWSY = 10.0
+# An alarm up to 3s after a drowsy segment ends still counts as a detection
+# (allows for natural response delay in the multi-cue fusion pipeline).
+DETECT_SLACK = 3.0
 
 SYSTEM_ORDER = [
     "baseline_fixed", "baseline_blendshape", "baseline_personal",
@@ -126,12 +133,24 @@ def calibration_samples(segments: list[SegmentRow], feats, times) -> PhaseSample
 # Scoring
 # --------------------------------------------------------------------------
 def score_run(times: np.ndarray, levels: np.ndarray, segments: list[SegmentRow]) -> dict:
+    """Score one system's alarm output against ground-truth segment labels.
+    
+    Returns a dict with:
+      - false_alarms: total false alarms during alert segments
+      - fa_per_hour: false alarm rate normalized per hour
+      - recall: fraction of drowsy episodes that triggered at least one alarm
+      - median_latency: median seconds between drowsy onset and first alarm
+      - fa_by_category: false alarms broken down by scenario type
+    """
+    # Find all alarm onset times (rising edges only — not sustained alarms)
     alarm = levels == ALARM
     onset_idx = np.where(alarm & ~np.r_[False, alarm[:-1]])[0]
     onsets = times[onset_idx]
     drowsy = [s for s in segments if s.label == "drowsy"]
     alert = [s for s in segments if s.label == "alert"]
 
+    # Count false alarms: alarms during alert segments, excluding the
+    # grace period right after a drowsy segment ends
     fa_by_cat: dict[str, int] = {}
     false_alarms = 0
     for t in onsets:
@@ -143,6 +162,8 @@ def score_run(times: np.ndarray, levels: np.ndarray, segments: list[SegmentRow])
         false_alarms += 1
         fa_by_cat[seg.category] = fa_by_cat.get(seg.category, 0) + 1
 
+    # Count detections: for each drowsy segment, check if any alarm fired
+    # during the segment (with a small slack window after it ends)
     detected, latencies = 0, []
     for d in drowsy:
         hit = np.where(alarm & (times >= d.start) & (times <= d.end + DETECT_SLACK))[0]

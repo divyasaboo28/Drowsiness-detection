@@ -1,8 +1,14 @@
 """All tunable numbers live here, so experiments never need code changes.
 
+This is the central configuration for every threshold, weight, and timing
+constant in the PADD system. Changing values here affects calibration,
+detection, fusion, and the UI without touching any logic code.
+
 Units: seconds for time, degrees for angles. "Openness" is the personal,
 pose-normalized eye scale: 1.0 = your normal open eye at the current head
 angle, 0.0 = your closed eye (both learned during calibration).
+
+Author / Contributor: Praga
 """
 
 # --------------------------------------------------------------------------

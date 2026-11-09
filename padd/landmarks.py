@@ -1,4 +1,11 @@
-"""Video input and the MediaPipe Face Landmarker wrapper."""
+"""Video input wrapper and MediaPipe Face Landmarker integration.
+
+FaceTracker wraps MediaPipe's face landmarker to extract 478-point
+face meshes, blendshape scores, and head pose matrices from each frame.
+Source abstracts over webcam vs. video file input with consistent timing.
+
+Author / Contributor: Praga
+"""
 
 from __future__ import annotations
 
@@ -27,6 +34,14 @@ def ensure_model(path: str | Path = C.MODEL_PATH) -> Path:
 
 
 class FaceTracker:
+    """Wraps MediaPipe FaceLandmarker for per-frame face analysis.
+    
+    Configured for VIDEO running mode with a single face. Outputs
+    478-point landmarks, facial transformation matrices (for head pose),
+    and blendshape scores (for the blendshape baseline detector).
+    Automatically downloads the model (~4 MB) on first use.
+    """
+
     def __init__(self, model_path: str | Path = C.MODEL_PATH):
         import mediapipe as mp
         from mediapipe.tasks import python as mp_python
@@ -47,15 +62,19 @@ class FaceTracker:
         self._last_ms = -1
 
     def process(self, frame_bgr, t: float) -> FrameFeatures | None:
+        """Run face landmark detection on an incoming BGR frame at time t (seconds)."""
         h, w = frame_bgr.shape[:2]
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         image = self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb)
-        ms = max(int(t * 1000), self._last_ms + 1)  # MediaPipe needs increasing timestamps
+        # MediaPipe requires strictly increasing integer timestamps (milliseconds).
+        # Ensure monotonicity even if frames arrive with identical timestamps.
+        ms = max(int(t * 1000), self._last_ms + 1)
         self._last_ms = ms
         result = self._landmarker.detect_for_video(image, ms)
         return from_mediapipe(result, w, h, t)
 
     def close(self) -> None:
+        """Release MediaPipe resources."""
         self._landmarker.close()
 
     def __enter__(self):
@@ -76,6 +95,8 @@ class Source:
                  width: int = 1280, height: int = 720):
         self.is_file = video is not None
         self.times: list[float] | None = None
+        # Video files use frame timestamps from frames.csv (if available) or
+        # frame index / fps. Webcams use wall-clock time and mirror the image.
         if self.is_file:
             self.cap = cv2.VideoCapture(str(video))
             self.fps = self.cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -84,6 +105,7 @@ class Source:
                 with open(frames_csv, newline="") as fh:
                     self.times = [float(r["t"]) for r in csv.DictReader(fh)]
         else:
+            # On Windows, DirectShow (CAP_DSHOW) opens webcams much faster with less latency
             backend = cv2.CAP_DSHOW if os.name == "nt" else cv2.CAP_ANY
             self.cap = cv2.VideoCapture(camera, backend)
             if not self.cap.isOpened():

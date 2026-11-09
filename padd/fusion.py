@@ -1,11 +1,22 @@
 """PADD: personalized, pose-aware, multi-cue drowsiness detector.
 
-Pipeline per frame:
-  raw features -> personal normalization (profile + pose model)
-  -> event detectors (blinks, PERCLOS, yawns, nods)
-  -> decaying evidence per cue -> confidence-weighted fusion
-  -> leaky integrator + hysteresis -> OK / CAUTION / ALARM
-with a safety override for long eye closures and guarded online adaptation.
+This is the main detection engine. Pipeline per frame:
+  raw features → personal normalization (profile + pose model)
+  → event detectors (blinks, PERCLOS, yawns, nods)
+  → decaying evidence per cue → confidence-weighted fusion
+  → leaky integrator + hysteresis → OK / CAUTION / ALARM
+
+Safety features:
+  - Microsleep override: eyes closed >= 2 s triggers immediate ALARM
+  - Head-slump override: a slow head droop that stays down 3 s triggers ALARM
+  - Recent-evidence rule: ALARM needs a drowsy sign in the last 6 s, so the
+    alarm stops soon after the driver is alert again
+  - Distraction warning: head down >= 3 s gives a separate soft warning
+    ("eyes on the road"), never a drowsiness ALARM
+  - Guarded adaptation: model only learns while the driver is clearly alert
+  - Confidence weighting: cues are down-weighted when the face is turned away
+
+Author / Contributor: Praga
 """
 
 from __future__ import annotations
@@ -28,6 +39,18 @@ from .system import ALARM, CAUTION, OK, DrowsinessSystem, Status
 
 
 class PADDSystem(DrowsinessSystem):
+    """The full PADD detection system with all features enabled.
+
+    Combines four drowsiness cues with configurable weights:
+      - eye (35%): PERCLOS + long closures
+      - blink (20%): slow blink frequency above personal baseline
+      - yawn (15%): detected yawns with speech filtering
+      - nod (30%): drowsy head nods (slow droop + fast recovery)
+
+    Each cue's contribution is scaled by landmark reliability (how well
+    the face/eyes/mouth can be seen), then fused through a leaky integrator
+    with hysteresis to produce the final OK → CAUTION → ALARM states.
+    """
     def __init__(
         self,
         profile: UserProfile,
@@ -75,6 +98,7 @@ class PADDSystem(DrowsinessSystem):
         self.last_t = t
         info: dict[str, float] = {}
 
+        # --- Step 1: Extract and normalize features using personal model ---
         eye_conf = mouth_conf = 0.0
         openness = None
         if f is not None:
@@ -122,12 +146,14 @@ class PADDSystem(DrowsinessSystem):
         head_down_for = 0.0 if self.head_down_since is None else t - self.head_down_since
         slumped_for = self.nods.slumped_for(t) if self.use_nod else 0.0
 
+        # --- Step 2: Smooth landmark confidence for each cue channel ---
         # Cue reliability = smoothed landmark confidence
         a = 1.0 - math.exp(-dt / C.RELIABILITY_TAU) if dt > 0 else 0.0
         face = 1.0 if f is not None else 0.0
         for key, conf in (("eye", eye_conf), ("blink", eye_conf), ("yawn", mouth_conf), ("nod", face)):
             self.rel[key] += a * (conf - self.rel[key])
 
+        # --- Step 3: Compute per-cue drowsiness scores [0..1] ---
         # Cue scores (0..1)
         perclos = self.perclos.value()
         perclos_score = float(np.clip(
@@ -143,6 +169,11 @@ class PADDSystem(DrowsinessSystem):
         if dt > 0:
             self.score += (1.0 - math.exp(-dt / C.FUSION_TAU)) * (fused - self.score)
 
+        # --- Step 4: Fuse cues and apply hysteresis state machine ---
+        # The state machine prevents rapid flickering between alert levels:
+        # - ALARM_ON (0.50) to enter alarm, ALARM_OFF (0.40) to leave
+        # - CAUTION_ON (0.35) to enter caution, CAUTION_OFF (0.25) to leave
+        # - Score must stay above ALARM_ON for ALARM_HOLD seconds (1s)
         # Hysteresis state machine. ALARM needs a high score AND fresh evidence:
         # the score alone remembers minutes of past events and would keep the
         # alarm on long after the person is alert again.
@@ -166,6 +197,7 @@ class PADDSystem(DrowsinessSystem):
             elif self.base_level == OK and D > C.CAUTION_ON:
                 self.base_level = CAUTION
 
+        # --- Step 5: Safety overrides (microsleep, head slump) and distraction ---
         if openness is not None:
             self.last_eye_t = t
         # Override only while we can actually see the eyes (not after turning away)
@@ -179,6 +211,9 @@ class PADDSystem(DrowsinessSystem):
         # however it got there, means the eyes are off the road.
         distracted = head_down_for >= C.DISTRACTION_TIME and level != ALARM
 
+        # --- Step 6: Online adaptation (only while clearly alert) ---
+        # Slowly adjusts the model for lighting/posture drift, but ONLY when
+        # the drowsiness score is very low and eyes are confirmed open.
         # Guarded adaptation: only learn while clearly alert and eyes open
         if (self.use_adapt and f is not None and openness is not None and dt > 0
                 and D < C.ADAPT_MAX_SCORE and openness > 0.6 and closed_for == 0.0):

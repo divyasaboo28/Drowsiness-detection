@@ -1,12 +1,20 @@
 """Record a labelled evaluation session: calibration + a scripted test drive.
 
-Output folder:
-  video.mp4      raw (mirrored) webcam frames, no overlays
-  frames.csv     frame index -> timestamp (s), so replays keep live timing
-  segments.csv   start,end,phase,label,category  (label: calib / alert / drowsy)
+The recording has two parts:
+  1. Full calibration phases (same as `main.py calibrate`)
+  2. A scripted scenario mixing normal driving behaviors and acted drowsy
+     episodes, with precise timing labels for later evaluation.
 
-The script mixes normal behaviour, the classic false-alarm triggers (phone,
-talking, mirror checks, laughing) and acted drowsy episodes.
+Output folder contains:
+  video.mp4      Raw (mirrored) webcam frames with no overlays
+  frames.csv     Frame index -> timestamp mapping for faithful replay timing  
+  segments.csv   Ground truth: start, end, phase, label (alert/drowsy), category
+
+The script includes common false-alarm triggers (phone use, talking,
+mirror checks, laughing) alongside drowsy episodes (slow blinks, head
+nods, microsleeps) so evaluation can measure both recall and specificity.
+
+Author / Contributor: Praga
 """
 
 from __future__ import annotations
@@ -23,6 +31,14 @@ from .ui import DARK, RED, WHITE, YELLOW, chime, text
 
 @dataclass(frozen=True)
 class Segment:
+    """One step in the recording script with timing and ground truth label.
+    
+    Attributes:
+        category:    Scenario type (normal, phone, talk, drowsy_blinks, etc.)
+        label:       Ground truth — "alert" or "drowsy"
+        seconds:     How long this segment lasts
+        instruction: On-screen text telling the participant what to do
+    """
     category: str
     label: str  # "alert" or "drowsy"
     seconds: float
@@ -70,6 +86,7 @@ def run_recording(source, out_dir: Path, skip_yawn: bool = False,
     frame_times: list[float] = []
     rows: list[dict] = []
     calib = phases(skip_yawn)
+    # Build the full recording plan: calibration phases first, then the test script
     steps = [("calib", p) for p in calib] + [("script", s) for s in SCRIPT]
     t_origin = None
     aborted = False
@@ -92,7 +109,8 @@ def run_recording(source, out_dir: Path, skip_yawn: bool = False,
             t_in = t_rel - t_start
             if t_in >= item.seconds:
                 break
-            writer.write(frame)  # save before drawing any overlay
+            # Save the clean raw frame BEFORE drawing any overlays on it
+            writer.write(frame)
             frame_times.append(t_rel)
 
             shown = frame.copy()

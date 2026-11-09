@@ -1,8 +1,15 @@
 """Temporal event detectors: blinks, PERCLOS, yawns and head nods.
 
-Every detector takes timestamps in seconds, so results do not depend on the
-camera's frame rate. Passing None for a value means "no reliable measurement
+Each detector is a state machine that processes one frame at a time,
+using timestamps in seconds so results don't depend on the camera's
+frame rate. Passing None for a value means "no reliable measurement
 this frame" and the detector simply waits.
+
+The detectors convert continuous signals (eye openness, mouth ratio,
+head pitch) into discrete events (BlinkEvent, YawnEvent, NodEvent)
+that the fusion layer uses to build the drowsiness score.
+
+Author / Contributor: Praga
 """
 
 from __future__ import annotations
@@ -29,6 +36,17 @@ class BlinkEvent:
 
 
 class BlinkDetector:
+    """Three-state blink detector: open -> closed -> reopening -> open.
+    
+    Classifies each eye closure as:
+    - Normal blink: short duration, quick reopen
+    - Slow blink: duration > personal p95 OR slow reopen (drowsiness indicator)
+    - Long closure: eyes shut >= 1 second (strong drowsiness / microsleep)
+    
+    Uses hysteresis thresholds (OPEN_CLOSE_T / OPEN_REOPEN_T / OPEN_FULL_T)
+    to avoid flickering between states due to noise.
+    """
+
     def __init__(
         self,
         slow_duration: float = C.DEFAULT_BLINK_DUR_P95,
@@ -45,6 +63,7 @@ class BlinkDetector:
         self.last_t = 0.0
 
     def closed_for(self, t: float) -> float:
+        """Returns elapsed seconds if currently in closed state, else 0.0."""
         return t - self.t_close if self.state == "closed" else 0.0
 
     def _finish(self, t: float) -> BlinkEvent:
@@ -54,18 +73,22 @@ class BlinkDetector:
         return BlinkEvent(t, self.duration, reopen, slow, long)
 
     def update(self, t: float, openness: float | None) -> list[BlinkEvent]:
+        """Update detector with current eye openness [0..1] and timestamp t."""
         events: list[BlinkEvent] = []
         self.last_t = t
         if openness is None:
             return events
         if self.state == "open":
+            # Transition OPEN -> CLOSED when eye openness drops below threshold
             if openness < C.OPEN_CLOSE_T:
                 self.state, self.t_close = "closed", t
         elif self.state == "closed":
+            # Transition CLOSED -> REOPENING when eye starts opening again
             if openness > C.OPEN_REOPEN_T:
                 self.duration = t - self.t_close
                 self.state, self.t_open = "reopening", t
         elif self.state == "reopening":
+            # Either completes the blink (fully open / timeout) or re-closes
             if openness < C.OPEN_CLOSE_T:  # closed again before fully open
                 events.append(self._finish(t))
                 self.state, self.t_close = "closed", t
@@ -76,7 +99,13 @@ class BlinkDetector:
 
 
 class PerclosTracker:
-    """Fraction of recent time with eyes at least 80% closed."""
+    """Tracks PERCLOS: percentage of time eyes are closed over a sliding window.
+    
+    PERCLOS is a well-established drowsiness metric from sleep research.
+    A value above ~15% (baseline + margin) indicates the driver's eyes
+    are spending too much time closed - a strong drowsiness signal.
+    Uses a deque-based sliding window (default 60 seconds).
+    """
 
     def __init__(self, window: float = C.PERCLOS_WINDOW):
         self.window = window
@@ -84,21 +113,26 @@ class PerclosTracker:
         self.n_closed = 0
 
     def update(self, t: float, openness: float | None) -> None:
+        """Add a frame observation (openness < PERCLOS_T is counted as closed)."""
         if openness is not None:
             closed = openness < C.PERCLOS_T
             self.samples.append((t, closed))
             self.n_closed += closed
+        # Evict samples outside the rolling time window
         while self.samples and self.samples[0][0] < t - self.window:
             _, c = self.samples.popleft()
             self.n_closed -= c
 
     def value(self) -> float:
+        """Return the fraction of window frames where eyes were closed."""
         return self.n_closed / len(self.samples) if self.samples else 0.0
 
 
 # --------------------------------------------------------------------------
 # Yawns
 # --------------------------------------------------------------------------
+# Helper to distinguish yawns from speech: yawns are one smooth hump,
+# while talking produces rapid zig-zag oscillations in mouth openness.
 def direction_changes(values: np.ndarray, amplitude: float) -> int:
     """Count reversals bigger than `amplitude` (zig-zags of a talking mouth)."""
     if len(values) < 2:
@@ -136,6 +170,17 @@ class YawnEvent:
 
 
 class YawnDetector:
+    """Detects yawns by finding sustained mouth-open events above a personal threshold.
+    
+    A valid yawn must:
+    1. Exceed the calibrated MAR threshold (set safely above talking levels)
+    2. Last at least YAWN_MIN_DURATION seconds (1.2s)
+    3. NOT exhibit rapid oscillations (which indicate speech, not yawning)
+    
+    The oscillation filter counts direction changes in the MAR signal;
+    speech produces >2 reversals/second, while yawns form a single smooth curve.
+    """
+
     def __init__(self, threshold: float = C.DEFAULT_YAWN_THRESHOLD):
         self.threshold = threshold
         self.history: deque[tuple[float, float]] = deque()
@@ -145,6 +190,7 @@ class YawnDetector:
         self.rejected_talking = 0
 
     def update(self, t: float, mar: float | None) -> YawnEvent | None:
+        """Update with current mouth aspect ratio (MAR) and timestamp t."""
         if mar is None:
             return None
         self.history.append((t, mar))
@@ -160,6 +206,7 @@ class YawnDetector:
         if mar >= self.threshold * C.YAWN_END_RATIO:
             return None
 
+        # Yawn has ended: validate duration and oscillation profile
         self.active = False
         duration = t - self.t_start
         if duration < C.YAWN_MIN_DURATION:
@@ -184,8 +231,19 @@ class NodEvent:
 
 
 class NodDetector:
-    """Separates a drowsy nod (slow droop, then a fast jerk back up) from a
-    deliberate look-down (fast drop, then holding still)."""
+    """Detects drowsy head nods: slow forward droop followed by a fast recovery jerk.
+    
+    State machine: level -> droop -> recovering -> level
+                   level -> lookdown -> level (deliberate, not counted)
+    
+    Key distinction from a normal look-down:
+    - Drowsy nod: SLOW droop (< 20 deg/s) + FAST snap back (> 40 deg/s)
+    - Voluntary look: FAST drop + steady hold -> ignored
+    - Slump: SLOW droop that stays down -> slumped_for() grows (used by
+      fusion.py for the head-slump ALARM)
+
+    Uses exponentially smoothed pitch and velocity to filter sensor noise.
+    """
 
     def __init__(self):
         self.state = "level"
@@ -198,6 +256,7 @@ class NodDetector:
         self.t_event = 0.0
 
     def reset(self, t: float) -> None:
+        """Reset detector state to level."""
         self.state, self.p, self.vel, self.last_t, self.t_level = "level", None, 0.0, t, t
 
     def slumped_for(self, t: float) -> float:
@@ -205,6 +264,7 @@ class NodDetector:
         return t - self.t_droop if self.state == "droop" else 0.0
 
     def update(self, t: float, rel_pitch: float | None) -> NodEvent | None:
+        """Process relative head pitch angle in degrees (positive = forward tilt)."""
         if rel_pitch is None:
             return None
         if self.p is None or self.last_t is None or t - self.last_t > 1.0:
@@ -214,8 +274,10 @@ class NodDetector:
         dt = max(t - self.last_t, 1e-3)
         self.last_t = t
         prev = self.p
+        # Exponential smoothing on head pitch position
         self.p += (1.0 - math.exp(-dt / C.NOD_SMOOTH_TAU)) * (rel_pitch - self.p)
         raw_vel = (self.p - prev) / dt
+        # Exponential smoothing on angular velocity
         self.vel += (1.0 - math.exp(-dt / C.NOD_VEL_TAU)) * (raw_vel - self.vel)
         p = self.p
 
@@ -225,12 +287,14 @@ class NodDetector:
             elif p >= C.NOD_DROOP_MIN:
                 elapsed = max(t - self.t_level, 1e-3)
                 avg_vel = (C.NOD_DROOP_MIN - C.NOD_LEVEL) / elapsed
+                # Slow droop suggests muscle tone loss from sleep onset
                 if avg_vel <= C.NOD_SLOW_MAX_VEL:
                     self.state, self.t_droop, self.peak = "droop", t, p
                 else:
                     self.state = "lookdown"
         elif self.state == "droop":
             self.peak = max(self.peak, p)
+            # Rapid upward snap indicates sudden waking reflex
             if self.vel <= -C.NOD_RECOVERY_VEL:
                 self.state, self.t_event = "recovering", t
                 return NodEvent(t, self.peak)
@@ -251,8 +315,12 @@ class NodDetector:
 # Decaying evidence
 # --------------------------------------------------------------------------
 class DecayingEvidence:
-    """Each event contributes exp(-age / tau). Score saturates at `full`
-    events, after subtracting what the user produces at rest."""
+    """Tracks accumulated recent evidence for a specific drowsiness cue.
+    
+    Each detected event (e.g. slow blink) adds an exponentially decaying score:
+    score = sum(exp(-(t - t_event) / tau)), normalized by the `full` count.
+    Subtracts the user's natural baseline rate so active blinkers aren't penalized.
+    """
 
     def __init__(self, tau: float, full: float, baseline_per_min: float = 0.0):
         self.tau = tau
@@ -261,12 +329,15 @@ class DecayingEvidence:
         self.events: deque[float] = deque()
 
     def add(self, t: float) -> None:
+        """Register a new detected event at timestamp t."""
         self.events.append(t)
 
     def value(self, t: float) -> float:
+        """Sum of exponential decay terms from past events within 5*tau."""
         while self.events and t - self.events[0] > 5.0 * self.tau:
             self.events.popleft()
         return sum(math.exp(-(t - te) / self.tau) for te in self.events)
 
     def score(self, t: float) -> float:
+        """Normalized cue score in [0.0, 1.0] after baseline subtraction."""
         return float(np.clip((self.value(t) - self.baseline) / self.full, 0.0, 1.0))
