@@ -8,8 +8,6 @@ Command-line interface for all system features:
   python main.py evaluate  --sessions sessions   # replay sessions, write results/
 
 Add --video path/to/file.mp4 to run/compare on a video instead of the webcam.
-
-Author / Contributor: Praga
 """
 
 from __future__ import annotations
@@ -66,10 +64,8 @@ def live_loop(args, systems, window: str) -> None:
             frame, t = src.read()
             if frame is None:
                 break
-            # Extract face landmarks and compute features for this frame
             f = tracker.process(frame, t)
             panels = []
-            # Run each detection system and render its status on a separate panel
             for system in systems:
                 status = system.update(f, t)
                 panel = frame.copy()

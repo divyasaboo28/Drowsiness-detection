@@ -13,8 +13,6 @@ Output folder contains:
 The script includes common false-alarm triggers (phone use, talking,
 mirror checks, laughing) alongside drowsy episodes (slow blinks, head
 nods, microsleeps) so evaluation can measure both recall and specificity.
-
-Author / Contributor: Praga
 """
 
 from __future__ import annotations

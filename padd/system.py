@@ -3,8 +3,6 @@
 This module defines the base class that all detection systems must inherit.
 It provides a unified update() interface and automatic alarm counting,
 so the evaluation framework can treat every system identically.
-
-Author / Contributor: Praga
 """
 
 from __future__ import annotations

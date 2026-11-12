@@ -8,8 +8,6 @@ Three baselines of increasing sophistication:
 All use the same simple logic: alarm if eyes closed for 1.6s or mouth
 open for 1.0s. The comparison shows how much personalization + pose
 normalization + multi-cue fusion improves over these simpler approaches.
-
-Author / Contributor: Praga
 """
 
 from __future__ import annotations

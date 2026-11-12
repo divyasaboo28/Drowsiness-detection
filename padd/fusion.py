@@ -15,8 +15,6 @@ Safety features:
     ("eyes on the road"), never a drowsiness ALARM
   - Guarded adaptation: model only learns while the driver is clearly alert
   - Confidence weighting: cues are down-weighted when the face is turned away
-
-Author / Contributor: Praga
 """
 
 from __future__ import annotations
@@ -147,14 +145,12 @@ class PADDSystem(DrowsinessSystem):
         slumped_for = self.nods.slumped_for(t) if self.use_nod else 0.0
 
         # --- Step 2: Smooth landmark confidence for each cue channel ---
-        # Cue reliability = smoothed landmark confidence
         a = 1.0 - math.exp(-dt / C.RELIABILITY_TAU) if dt > 0 else 0.0
         face = 1.0 if f is not None else 0.0
         for key, conf in (("eye", eye_conf), ("blink", eye_conf), ("yawn", mouth_conf), ("nod", face)):
             self.rel[key] += a * (conf - self.rel[key])
 
         # --- Step 3: Compute per-cue drowsiness scores [0..1] ---
-        # Cue scores (0..1)
         perclos = self.perclos.value()
         perclos_score = float(np.clip(
             (perclos - self.profile.perclos_base - C.PERCLOS_MARGIN) / C.PERCLOS_FULL_EXCESS, 0.0, 1.0))
@@ -170,11 +166,8 @@ class PADDSystem(DrowsinessSystem):
             self.score += (1.0 - math.exp(-dt / C.FUSION_TAU)) * (fused - self.score)
 
         # --- Step 4: Fuse cues and apply hysteresis state machine ---
-        # The state machine prevents rapid flickering between alert levels:
-        # - ALARM_ON (0.50) to enter alarm, ALARM_OFF (0.40) to leave
-        # - CAUTION_ON (0.35) to enter caution, CAUTION_OFF (0.25) to leave
-        # - Score must stay above ALARM_ON for ALARM_HOLD seconds (1s)
-        # Hysteresis state machine. ALARM needs a high score AND fresh evidence:
+        # Separate on/off thresholds (see config.py) stop the level flickering.
+        # ALARM needs a high score AND fresh evidence:
         # the score alone remembers minutes of past events and would keep the
         # alarm on long after the person is alert again.
         D = self.score
@@ -214,7 +207,6 @@ class PADDSystem(DrowsinessSystem):
         # --- Step 6: Online adaptation (only while clearly alert) ---
         # Slowly adjusts the model for lighting/posture drift, but ONLY when
         # the drowsiness score is very low and eyes are confirmed open.
-        # Guarded adaptation: only learn while clearly alert and eyes open
         if (self.use_adapt and f is not None and openness is not None and dt > 0
                 and D < C.ADAPT_MAX_SCORE and openness > 0.6 and closed_for == 0.0):
             self.model.adapt(f.ear, f.pitch, self.model.rel_yaw(f.yaw), dt)

@@ -5,8 +5,6 @@ The UserProfile stores all calibrated values as plain JSON — it's the
 PersonalModel wraps a profile at runtime to convert raw measurements
 into personalized ones (openness, relative pitch) and carries the
 guarded online adaptation state, which is never saved to disk.
-
-Author / Contributor: Praga
 """
 
 from __future__ import annotations

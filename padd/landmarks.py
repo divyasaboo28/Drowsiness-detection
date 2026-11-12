@@ -3,8 +3,6 @@
 FaceTracker wraps MediaPipe's face landmarker to extract 478-point
 face meshes, blendshape scores, and head pose matrices from each frame.
 Source abstracts over webcam vs. video file input with consistent timing.
-
-Author / Contributor: Praga
 """
 
 from __future__ import annotations

@@ -8,8 +8,6 @@ For each session folder (created by `python main.py record`):
 
 Outputs comparison metrics: recall, false alarm rate, detection latency,
 and false alarms broken down by category (phone, talk, mirror, laugh, normal).
-
-Author / Contributor: Praga
 """
 
 from __future__ import annotations

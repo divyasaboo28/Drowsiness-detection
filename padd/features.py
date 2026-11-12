@@ -3,8 +3,6 @@
 This module computes Eye Aspect Ratio (EAR), Mouth Aspect Ratio (MAR),
 and head pose (pitch/yaw/roll) from the 478-point face mesh. These
 features are the raw inputs to calibration and all detection systems.
-
-Author / Contributor: Praga
 """
 
 from __future__ import annotations

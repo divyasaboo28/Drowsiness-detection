@@ -9,8 +9,6 @@ The calibration walks the user through 9 phases to learn their unique:
 fit_profile() only needs features grouped by phase, so the same code fits
 a profile live (run_calibration) and offline from a recorded session
 (evaluate.py).
-
-Author / Contributor: Praga
 """
 
 from __future__ import annotations

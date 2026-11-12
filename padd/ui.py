@@ -1,13 +1,12 @@
 """OpenCV overlays, the split-screen comparison view, and the alarm beep.
 
 Provides all the visual feedback for the live detection window:
-  - Face landmark drawing (eyes in yellow, mouth in pink)
+  - Face landmark drawing (eye points in cyan, mouth lines in pink)
   - Status banner with color-coded alert level (green/yellow/red)
+  - Orange "eyes on the road" banner for the distraction warning
   - Per-cue progress bars and fused drowsiness score bar
   - Alarm reason text at the bottom of the frame
   - Non-blocking audio alerts using the system beeper
-
-Author / Contributor: Praga
 """
 
 from __future__ import annotations
@@ -45,7 +44,7 @@ def text(img, s, org, scale=0.55, color=WHITE, thick=1, bg=True):
 
 
 def draw_landmarks(img, f: FrameFeatures | None) -> None:
-    """Draw eye contours (yellow dots) and mouth mesh (pink lines) onto image."""
+    """Draw the eye landmarks (cyan dots) and mouth lines (pink) onto the image."""
     if f is None or f.points is None:
         return
     pts = f.points.astype(int)

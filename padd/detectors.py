@@ -8,8 +8,6 @@ this frame" and the detector simply waits.
 The detectors convert continuous signals (eye openness, mouth ratio,
 head pitch) into discrete events (BlinkEvent, YawnEvent, NodEvent)
 that the fusion layer uses to build the drowsiness score.
-
-Author / Contributor: Praga
 """
 
 from __future__ import annotations
